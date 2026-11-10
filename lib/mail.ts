@@ -49,6 +49,12 @@ export async function sendVerificationEmail({
         user,
         pass,
       },
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
       // Prefer IPv4 to avoid ENETUNREACH issues on environments without IPv6 routes
       family: 4,
     } as any);
