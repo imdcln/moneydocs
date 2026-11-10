@@ -321,9 +321,15 @@ function AuthForm() {
           }
 
           // Switch to OTP view
-          setOtpDigits(Array(6).fill(""));
+          // In dev mode, auto-fill the OTP from the response if SMTP is unavailable
+          if (otpData.devOtp) {
+            // Dev: SMTP failed but server returned the OTP directly — auto-fill for convenience
+            setOtpDigits(String(otpData.devOtp).split(""));
+            setSuccess("[DEV] SMTP offline — OTP auto-filled. Check terminal for the code.");
+          } else {
+            setOtpDigits(Array(6).fill(""));
+          }
           setError(null);
-          setSuccess(null);
           setMode("otp");
           startResendCooldown(60);
           setLoading(false);

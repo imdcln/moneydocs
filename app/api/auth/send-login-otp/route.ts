@@ -62,6 +62,8 @@ export async function POST(req: NextRequest) {
     user.verificationCodeExpires = expiresAt;
     await user.save();
 
+    console.log(`\n========================================\n🔑 [LOGIN OTP] Code for ${user.email}: ${otp}\n========================================\n`);
+
     const mailResult = await sendVerificationEmail({
       to: user.email,
       name: user.name,
@@ -69,6 +71,15 @@ export async function POST(req: NextRequest) {
     });
 
     if (!mailResult.success) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`[send-login-otp] DEV MODE: Email failed (${mailResult.error}), fallback OTP available in terminal: ${otp}`);
+        return NextResponse.json({
+          success: true,
+          requiresOtp: true,
+          message: `[DEV] SMTP connection failed, but your code is printed in terminal: ${otp}`,
+          devOtp: otp,
+        });
+      }
       return NextResponse.json(
         { error: mailResult.error || "Failed to send verification email.", code: "EMAIL_SEND_FAILED" },
         { status: 500 }
