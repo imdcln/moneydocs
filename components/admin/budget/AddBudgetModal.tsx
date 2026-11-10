@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X,
@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Check,
   AlertCircle,
+  FolderPlus,
 } from "lucide-react";
 import CategoryIcon, { AllCategoriesGlobeGraphic } from "@/components/ui/CategoryIcon";
 import { CalendarIcon } from "@/components/ui/AppIcons";
@@ -16,11 +17,14 @@ import { formatThousands, getCurrencyDisplayCode } from "@/lib/currency";
 import {
   BudgetPeriodType,
   getMonthRange,
+  getWeekRange,
+  getQuarterRange,
+  getYearRange,
   formatBudgetPeriodDisplay,
   getBudgetCategoryIcons,
 } from "@/lib/budgetUtils";
 import BudgetCategoryIcons from "./BudgetCategoryIcons";
-import CustomKeypad from "@/components/admin/CustomKeypad";
+import CustomKeypad, { safeEvaluateMath } from "@/components/admin/CustomKeypad";
 import SelectTimeRangeModal from "./SelectTimeRangeModal";
 import SelectCategoryModal, { CategoryKey } from "./SelectCategoryModal";
 
@@ -49,11 +53,12 @@ interface BudgetEditData {
 interface AddBudgetModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (periodType?: BudgetPeriodType) => void;
   userCurrency?: string;
   wallets: Wallet[];
   initialBudget?: BudgetEditData | null;
   initialWalletId?: string;
+  initialPeriodType?: BudgetPeriodType;
 }
 
 /**
@@ -92,10 +97,11 @@ export default function AddBudgetModal({
   wallets,
   initialBudget = null,
   initialWalletId = "ALL",
+  initialPeriodType = "MONTH",
 }: AddBudgetModalProps) {
   const isEditing = !!initialBudget;
 
-  const [selectedCategories, setSelectedCategories] = useState<CategoryKey[]>(["ALL_CATEGORIES"]);
+  const [selectedCategories, setSelectedCategories] = useState<CategoryKey[]>([]);
   const [budgetName, setBudgetName] = useState<string>("");
   const [rawAmount, setRawAmount] = useState<string>("0");
   const [periodType, setPeriodType] = useState<BudgetPeriodType>("MONTH");
@@ -148,13 +154,18 @@ export default function AddBudgetModal({
           : "ALL";
         setWalletId(wId);
       } else {
-        setSelectedCategories(["ALL_CATEGORIES"]);
+        setSelectedCategories([]);
         setBudgetName("");
         setRawAmount("0");
-        const defMonth = getMonthRange(new Date());
-        setPeriodType("MONTH");
-        setStartDate(defMonth.startDate);
-        setEndDate(defMonth.endDate);
+        const targetPeriod = initialPeriodType || "MONTH";
+        setPeriodType(targetPeriod);
+        let range: { startDate: Date; endDate: Date };
+        if (targetPeriod === "WEEK") range = getWeekRange(new Date());
+        else if (targetPeriod === "QUARTER") range = getQuarterRange(new Date());
+        else if (targetPeriod === "YEAR") range = getYearRange(new Date());
+        else range = getMonthRange(new Date());
+        setStartDate(range.startDate);
+        setEndDate(range.endDate);
         setRepeat(false);
         // Default creation budget to currently opened wallet
         setWalletId(initialWalletId || "ALL");
@@ -162,7 +173,97 @@ export default function AddBudgetModal({
       setIsKeypadOpen(false);
       setError("");
     });
-  }, [isOpen, initialBudget, initialWalletId]);
+  }, [isOpen, initialBudget, initialWalletId, initialPeriodType]);
+
+  const rawAmountRef = useRef(rawAmount);
+  rawAmountRef.current = rawAmount;
+
+  const handleKeypadSubmit = () => {
+    if (/[+×÷\-\*\/]/.test(rawAmountRef.current)) {
+      setRawAmount(safeEvaluateMath(rawAmountRef.current));
+    } else {
+      setIsKeypadOpen(false);
+    }
+  };
+
+  // Physical keyboard support while keypad is open:
+  // digits (0-9, including laptop numpads), decimal, operators, backspace, clear, Enter, Escape
+  useEffect(() => {
+    if (!isKeypadOpen) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      // Don't intercept if focus is inside an input, textarea, or select
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleKeypadSubmit();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIsKeypadOpen(false);
+        return;
+      }
+
+      // Digits 0-9 (matches top number row and laptop/numpad numbers)
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        setRawAmount((prev) => {
+          if (prev === "0") return e.key;
+          if (prev.length >= 15) return prev;
+          return prev + e.key;
+        });
+        return;
+      }
+
+      // Decimal point
+      if (e.key === "." || e.key === ",") {
+        e.preventDefault();
+        setRawAmount((prev) => {
+          if (!prev) return "0.";
+          if (prev.includes(".")) return prev;
+          return prev + ".";
+        });
+        return;
+      }
+
+      // Math operators
+      if (e.key === "+" || e.key === "-" || e.key === "*" || e.key === "/") {
+        e.preventDefault();
+        const op = e.key === "*" ? "×" : e.key === "/" ? "÷" : e.key;
+        setRawAmount((prev) => {
+          if (!prev) return prev;
+          const last = prev[prev.length - 1];
+          if (["+", "-", "×", "÷"].includes(last)) return prev.slice(0, -1) + op;
+          return prev + op;
+        });
+        return;
+      }
+
+      // Backspace
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        setRawAmount((prev) => {
+          if (prev.length <= 1) return "0";
+          return prev.slice(0, -1);
+        });
+        return;
+      }
+
+      // Clear (c / C / Delete)
+      if (e.key === "c" || e.key === "C" || e.key === "Delete") {
+        e.preventDefault();
+        setRawAmount("0");
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isKeypadOpen]);
 
   const selectedWallet = wallets.find((w) => w._id === walletId);
   const walletDisplayName = selectedWallet ? selectedWallet.name : "Total";
@@ -173,17 +274,39 @@ export default function AddBudgetModal({
    * Derive legacy `category` / `subCategory` from the first selected key
    * for backward-compat with the API and duplicate-check logic.
    */
-  const primaryKey = selectedCategories[0] || "ALL_CATEGORIES";
-  const isAllCategories = selectedCategories.includes("ALL_CATEGORIES") || selectedCategories.length === 0;
+  const noCategorySelected = selectedCategories.length === 0;
+  const isAllCategories = selectedCategories.includes("ALL_CATEGORIES");
+  const primaryKey = isAllCategories ? "ALL_CATEGORIES" : (selectedCategories[0] || "");
   const [primaryParentId, primaryChildId] = primaryKey.split(":");
   const legacyCategory = isAllCategories ? "ALL_CATEGORIES" : primaryParentId;
   const legacySubCategory = isAllCategories ? undefined : primaryChildId;
 
   const handleSave = async () => {
-    const numAmount = parseFloat(rawAmount.replace(/,/g, ""));
+    let curAmount = rawAmount;
+    if (/[+×÷\-\*\/]/.test(curAmount)) {
+      curAmount = safeEvaluateMath(curAmount);
+      setRawAmount(curAmount);
+    }
+    const numAmount = parseFloat(curAmount.replace(/,/g, ""));
     if (isNaN(numAmount) || numAmount <= 0) {
       setError("Please enter a valid budget amount limit greater than 0.");
       return;
+    }
+
+    // Start date must not be after end date
+    if (startDate > endDate) {
+      setError("Start date must be before or equal to the end date.");
+      return;
+    }
+
+    // Budgets cannot be created for a period entirely in the past
+    if (!isEditing) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (endDate < today) {
+        setError("Budget period cannot be in the past. Please select a present or future time range.");
+        return;
+      }
     }
 
     setSaving(true);
@@ -239,7 +362,7 @@ export default function AddBudgetModal({
       const data = await res.json();
 
       if (res.ok) {
-        onSuccess();
+        onSuccess(periodType);
         onClose();
       } else {
         setError(data.error || "Failed to save budget.");
@@ -253,7 +376,7 @@ export default function AddBudgetModal({
 
   const periodDisplayText = formatBudgetPeriodDisplay(periodType, startDate, endDate);
   const displayLabel = getCategoriesDisplayLabel(selectedCategories);
-  const isAllCats = selectedCategories.includes("ALL_CATEGORIES") || selectedCategories.length === 0;
+  const isAllCats = selectedCategories.includes("ALL_CATEGORIES");
   const isMultiCategories = !isAllCats && selectedCategories.length > 1;
   const showBudgetNameSection = isMultiCategories || (isEditing && !!initialBudget?.name);
 
@@ -322,18 +445,32 @@ export default function AddBudgetModal({
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-white/[0.02] active:bg-white/[0.04] transition-colors"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <BudgetCategoryIcons
-                      icons={getBudgetCategoryIcons({ categories: selectedCategories })}
-                      size="sm"
-                    />
+                    {noCategorySelected ? (
+                      <div className="w-8 h-8 rounded-full bg-white/5 border border-dashed border-white/20 flex items-center justify-center text-slate-400 flex-shrink-0">
+                        <FolderPlus className="w-4 h-4 text-slate-400" />
+                      </div>
+                    ) : (
+                      <BudgetCategoryIcons
+                        icons={getBudgetCategoryIcons({ categories: selectedCategories })}
+                        size="sm"
+                      />
+                    )}
                     <div className="min-w-0">
-                      <span className="text-white text-base font-semibold truncate block">
-                        {budgetName.trim() || displayLabel}
-                      </span>
-                      {!isAllCats && selectedCategories.length > 1 && (
-                        <span className="text-slate-400 text-xs block truncate">
-                          {displayLabel} • {selectedCategories.length} categories
+                      {noCategorySelected ? (
+                        <span className="text-slate-400 text-base font-semibold truncate block">
+                          Select category...
                         </span>
+                      ) : (
+                        <>
+                          <span className="text-white text-base font-semibold truncate block">
+                            {budgetName.trim() || displayLabel}
+                          </span>
+                          {!isAllCats && selectedCategories.length > 1 && (
+                            <span className="text-slate-400 text-xs block truncate">
+                              {displayLabel} • {selectedCategories.length} categories
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -413,7 +550,10 @@ export default function AddBudgetModal({
                         walletId === w._id ? "bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)]" : "text-slate-300 hover:bg-white/5"
                       }`}
                     >
-                      <span>💳 {w.name} ({w.currency})</span>
+                      <span className="flex items-center gap-1.5">
+                        <WalletIcon className="w-3.5 h-3.5 text-slate-400" />
+                        {w.name} ({w.currency})
+                      </span>
                       {walletId === w._id && <Check className="w-4 h-4 text-[var(--color-primary-light)]" />}
                     </button>
                   ))}
@@ -461,12 +601,12 @@ export default function AddBudgetModal({
                 disabled={saving}
                 className="w-full py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#22c55e] active:text-white text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] cursor-pointer disabled:opacity-50 text-center"
               >
-                {saving ? "Saving…" : "Save"}
+                {saving ? "Saving..." : "Save"}
               </button>
             </div>
           </motion.div>
 
-          {/* Floating Custom Keypad — slides up from bottom covering bottom nav */}
+          {/* Floating Custom Keypad - slides up from bottom covering bottom nav */}
           <AnimatePresence>
             {isKeypadOpen && (
               <>
@@ -500,13 +640,13 @@ export default function AddBudgetModal({
                   <CustomKeypad
                     value={rawAmount}
                     onChange={(val) => setRawAmount(val)}
-                    onSubmit={() => setIsKeypadOpen(false)}
+                    onSubmit={handleKeypadSubmit}
                     showQuickChips={false}
                   />
                   <div className="px-2 pt-3 pb-2 border-t border-white/8 mt-2">
                     <button
                       type="button"
-                      onClick={() => setIsKeypadOpen(false)}
+                      onClick={handleKeypadSubmit}
                       className="w-full py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#1f2026] text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] text-center cursor-pointer"
                     >
                       Done

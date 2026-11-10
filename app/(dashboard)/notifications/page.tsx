@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
@@ -17,7 +17,6 @@ import {
   Users,
   Check,
   X,
-  BarChart3,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -83,8 +82,6 @@ export default function NotificationsPage() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<(typeof TYPE_FILTERS)[number]>("ALL");
-  const [testLoading, setTestLoading] = useState(false);
-  const [recapLoading, setRecapLoading] = useState(false);
   const [toast, setToast] = useState<{ msg: string; color?: string } | null>(null);
   const [respondingInviteId, setRespondingInviteId] = useState<string | null>(null);
 
@@ -151,44 +148,35 @@ export default function NotificationsPage() {
     showToast("All notifications cleared");
   };
 
-  const sendTestPush = async () => {
-    setTestLoading(true);
-    try {
-      const res = await fetch("/api/notifications/test-push", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(
-          data.activeDevices > 0
-            ? `Test push sent to ${data.activeDevices} device(s)! 🔔`
-            : "Test notification saved (no push device registered yet)"
-        );
-        fetchNotifications();
-      } else {
-        showToast("Failed to send test", "#ef4444");
-      }
-    } finally {
-      setTestLoading(false);
-    }
-  };
+  // Auto-schedule daily recap at 23:00 device local time (1 h before midnight)
+  useEffect(() => {
+    if (!isSubscribed) return;
+    let timerId: ReturnType<typeof setTimeout>;
 
-  const triggerDailyRecap = async () => {
-    setRecapLoading(true);
-    try {
-      const res = await fetch("/api/finance/daily-recap", { method: "POST" });
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        showToast("Daily recap sent! 📊");
-        fetchNotifications();
-      } else {
-        showToast(data.message || "No activity today or notifications disabled", "#f59e0b");
+    const scheduleRecap = () => {
+      const now = new Date();
+      const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 0, 0, 0);
+      if (target <= now) {
+        // 23:00 already passed today — schedule for tomorrow
+        target.setDate(target.getDate() + 1);
       }
-    } catch {
-      showToast("Failed to generate daily recap", "#ef4444");
-    } finally {
-      setRecapLoading(false);
-    }
-  };
+      const msUntilRecap = target.getTime() - now.getTime();
+      timerId = setTimeout(async () => {
+        try {
+          const res = await fetch("/api/finance/daily-recap", { method: "POST" });
+          if (res.ok) {
+            fetchNotifications();
+          }
+        } catch {
+          // silently ignore — recap will retry on next page load
+        }
+        scheduleRecap();
+      }, msUntilRecap);
+    };
 
+    scheduleRecap();
+    return () => clearTimeout(timerId);
+  }, [isSubscribed, fetchNotifications]);
   const handleSubscribeToggle = async () => {
     if (isSubscribed) {
       await unsubscribe();
@@ -214,14 +202,10 @@ export default function NotificationsPage() {
       });
 
       if (res.ok) {
-        // Mark notification as read then remove from list
-        await fetch("/api/notifications", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: notif._id }),
-        });
+        // Delete the invite notification automatically after accept/decline
+        await fetch(`/api/notifications?id=${notif._id}`, { method: "DELETE" });
         setNotifications((prev) => prev.filter((n) => n._id !== notif._id));
-        setUnreadCount((c) => Math.max(0, c - 1));
+        if (!notif.isRead) setUnreadCount((c) => Math.max(0, c - 1));
         showToast(
           action === "ACCEPT"
             ? `Joined "${notif.metadata?.walletName || "wallet"}"! 🎉`
@@ -313,36 +297,17 @@ export default function NotificationsPage() {
               </button>
             )}
 
-            {/* Subscribed: disable + test + recap */}
+            {/* Subscribed: disable */}
             {isSubscribed && (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSubscribeToggle}
-                  disabled={isRegistering}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all disabled:opacity-50"
-                  style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#f87171" }}
-                >
-                  <BellOff className="w-3.5 h-3.5" />
-                  Disable
-                </button>
-                <button
-                  onClick={sendTestPush}
-                  disabled={testLoading}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition-colors disabled:opacity-50"
-                >
-                  <Bell className="w-3.5 h-3.5" />
-                  {testLoading ? "Sending…" : "Test"}
-                </button>
-                <button
-                  onClick={triggerDailyRecap}
-                  disabled={recapLoading}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition-colors disabled:opacity-50"
-                  title="Generate today's spending recap"
-                >
-                  <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
-                  {recapLoading ? "Generating…" : "Recap"}
-                </button>
-              </div>
+              <button
+                onClick={handleSubscribeToggle}
+                disabled={isRegistering}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+                style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#f87171" }}
+              >
+                <BellOff className="w-4 h-4" />
+                {isRegistering ? "Disabling…" : "Disable Notifications"}
+              </button>
             )}
             {permission === "denied" && (
               <p className="text-xs text-red-400 mt-1">

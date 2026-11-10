@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Check } from "lucide-react";
+import { Check, AlertCircle } from "lucide-react";
 import { CustomDatePicker } from "@/components/ui/AppIcons";
 import {
   BudgetPeriodType,
@@ -37,6 +37,7 @@ export default function SelectTimeRangeModal({
   onSave,
 }: SelectTimeRangeModalProps) {
   const [tempType, setTempType] = useState<BudgetPeriodType>(selectedPeriodType);
+  const [customError, setCustomError] = useState<string>("");
 
   const getSafeEndDate = (sDate: Date, eDate: Date, pType: BudgetPeriodType) => {
     let e = new Date(eDate);
@@ -56,6 +57,7 @@ export default function SelectTimeRangeModal({
       setTempType(selectedPeriodType);
       setCustomStart(toLocalDateInput(startDate));
       setCustomEnd(toLocalDateInput(getSafeEndDate(startDate, endDate, selectedPeriodType)));
+      setCustomError("");
     }
   }, [isOpen, selectedPeriodType, startDate, endDate]);
 
@@ -65,6 +67,7 @@ export default function SelectTimeRangeModal({
 
   const handleSelectOption = (type: BudgetPeriodType) => {
     setTempType(type);
+    setCustomError("");
   };
 
   const handleSave = () => {
@@ -73,6 +76,22 @@ export default function SelectTimeRangeModal({
       const [eY, eM, eD] = customEnd.split("-").map(Number);
       const s = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
       const e = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
+
+      // Validate: end date must not be entirely in the past
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (e < today) {
+        setCustomError("Budget end date cannot be in the past. Please select a present or future date.");
+        return;
+      }
+
+      // Validate: start must be before or equal to end
+      if (s > e) {
+        setCustomError("Start date must be before or equal to the end date.");
+        return;
+      }
+
+      setCustomError("");
       onSave("CUSTOM", s, e);
     } else if (tempType === "WEEK") {
       const { startDate: s, endDate: e } = getWeekRange(new Date());
@@ -173,7 +192,7 @@ export default function SelectTimeRangeModal({
                 <div className="w-full bg-[#252830] border border-white/10 rounded-xl px-3 py-2">
                   <CustomDatePicker
                     value={customStart}
-                    onChange={setCustomStart}
+                    onChange={(val) => { setCustomStart(val); setCustomError(""); }}
                     placeholder="Start date"
                   />
                 </div>
@@ -183,11 +202,19 @@ export default function SelectTimeRangeModal({
                 <div className="w-full bg-[#252830] border border-white/10 rounded-xl px-3 py-2">
                   <CustomDatePicker
                     value={customEnd}
-                    onChange={setCustomEnd}
+                    onChange={(val) => { setCustomEnd(val); setCustomError(""); }}
                     placeholder="End date"
                   />
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Custom date error */}
+          {customError && (
+            <div className="flex items-start gap-2 mt-2 px-1 py-2 bg-red-500/10 border border-red-500/30 rounded-xl animate-in fade-in duration-150">
+              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-red-400 text-xs leading-relaxed">{customError}</p>
             </div>
           )}
         </div>

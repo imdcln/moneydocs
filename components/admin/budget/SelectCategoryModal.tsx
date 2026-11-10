@@ -7,9 +7,9 @@ import CategoryIcon, { AllCategoriesGlobeGraphic } from "@/components/ui/Categor
 
 /**
  * Each selected category key is one of:
- *   "ALL_CATEGORIES"          → all expense categories
- *   "food_beverage"           → entire parent (all subcategories included)
- *   "food_beverage:drinks"    → specific subcategory
+ *   "ALL_CATEGORIES"          Ã¢â€ â€™ all expense categories
+ *   "food_beverage"           Ã¢â€ â€™ entire parent (all subcategories included)
+ *   "food_beverage:drinks"    Ã¢â€ â€™ specific subcategory
  */
 export type CategoryKey = string;
 
@@ -61,9 +61,13 @@ export default function SelectCategoryModal({
   /** Toggle a parent category. Selecting parent removes individual child keys and adds parent key.
    *  Deselecting parent removes parent key and all its child keys. */
   const handleToggleParent = (parentId: string) => {
-    if (isAllCategoriesSelected) return; // all-cats takes precedence
     const parent = expenseParents.find((p) => p.id === parentId);
     if (!parent) return;
+
+    if (isAllCategoriesSelected) {
+      onSelect([parentId]);
+      return;
+    }
 
     const childKeys = parent.children.map((c) => `${parentId}:${c.id}`);
 
@@ -81,15 +85,19 @@ export default function SelectCategoryModal({
 
   /** Toggle a single child. If parent was checked, expand to individual children minus this one. */
   const handleToggleChild = (parentId: string, childId: string) => {
-    if (isAllCategoriesSelected) return;
     const parent = expenseParents.find((p) => p.id === parentId);
     if (!parent) return;
 
     const childKey = `${parentId}:${childId}`;
+
+    if (isAllCategoriesSelected) {
+      onSelect([childKey]);
+      return;
+    }
     const allChildKeys = parent.children.map((c) => `${parentId}:${c.id}`);
 
     if (selectedCategories.includes(parentId)) {
-      // Parent was selected → expand to all child keys then remove this one
+      // Parent was selected Ã¢â€ â€™ expand to all child keys then remove this one
       const expanded = allChildKeys.filter((k) => k !== childKey);
       onSelect([
         ...selectedCategories.filter((k) => k !== parentId),
@@ -119,7 +127,7 @@ export default function SelectCategoryModal({
 
   return (
     <div className="fixed inset-0 z-[95] bg-[#0c0d10] text-white flex flex-col animate-in fade-in duration-200">
-      {/* ── Top Bar ────────────────────────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Top Bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/8 bg-[#111216]">
         <div className="flex items-center gap-3">
           <button
@@ -171,7 +179,7 @@ export default function SelectCategoryModal({
         </div>
       )}
 
-      {/* ── Scrollable Category List ─────────────────────────────────────────── */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Scrollable Category List Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 pb-28">
         {/* Row 1: All Categories */}
         <div

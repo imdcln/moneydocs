@@ -9,21 +9,13 @@ import {
   Plus,
   Trash2,
   Wallet as WalletIcon,
-  AlertTriangle,
   ChevronDown,
-  ChevronUp,
   MoreVertical,
   Check,
   Star,
   ArrowRightLeft,
   Edit3,
   Archive,
-  ArrowLeft,
-  Search,
-  Package,
-  Sparkles,
-  Coins,
-  ChevronRight,
   Sliders,
   LogOut,
   GripVertical,
@@ -32,6 +24,7 @@ import {
   Smartphone,
   TrendingUp,
   Layers,
+  AlertTriangle,
 } from "lucide-react";
 import {
   formatMoney,
@@ -44,17 +37,6 @@ import { WalletGraphic } from "@/components/ui/AppIcons";
 import { useToast } from "@/components/ui/Toast";
 import TransferModal from "@/components/admin/TransferModal";
 import CurrencyFlag from "@/components/admin/CurrencyFlag";
-import { CATEGORIES_TREE, ParentCategory, SubCategory } from "@/lib/categories";
-import CategoryIcon from "@/components/ui/CategoryIcon";
-import CustomKeypad, { safeEvaluateMath } from "@/components/admin/CustomKeypad";
-
-function formatThousands(val: string): string {
-  if (!val) return "0";
-  if (/[+\-*/×÷]/.test(val)) return val;
-  const parts = val.split(".");
-  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return parts.join(".");
-}
 
 export interface Wallet {
   _id: string;
@@ -67,12 +49,24 @@ export interface Wallet {
   excludeFromTotal?: boolean;
   excludeFromReport?: boolean;
   archived?: boolean;
+  order?: number;
   enableNotification?: boolean;
   disabledCategories?: string[];
-  sharedWith?: Array<{ email: string; name?: string; role: string; status?: string }>;
+  sharedWith?: Array<{
+    email: string;
+    name?: string;
+    role: string;
+    roleName?: string;
+    permissions?: any;
+    status?: string;
+    image?: string;
+    profileColor?: string;
+  }>;
   userId?: string;
   ownerEmail?: string;
   ownerName?: string;
+  ownerImage?: string;
+  ownerProfileColor?: string;
 }
 
 interface WalletTypeOption {
@@ -154,1054 +148,17 @@ interface ConfirmDialogState {
   walletName: string;
 }
 
-// ── Wallet Category Selection Modal matching Screenshot 3 ──────────────────
-interface WalletCategorySelectionModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  disabledCategories: string[];
-  onChangeDisabled: (newDisabled: string[]) => void;
-}
-
-function WalletCategorySelectionModal({
-  isOpen,
-  onClose,
-  disabledCategories,
-  onChangeDisabled,
-}: WalletCategorySelectionModalProps) {
-  const [activeTab, setActiveTab] = useState<"EXPENSE" | "INCOME" | "DEBT">("EXPENSE");
-  const [search, setSearch] = useState("");
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Lock background scroll when category modal is open
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  if (!isOpen || !mounted) return null;
-
-  const currentCategories = CATEGORIES_TREE.filter((c) => c.type === activeTab);
-
-  // Flatten all items for current tab (parents and children)
-  const allTabItemIds: string[] = [];
-  currentCategories.forEach((parent) => {
-    allTabItemIds.push(parent.id);
-    parent.children.forEach((c) => allTabItemIds.push(c.id));
-  });
-
-  const allActiveInTab = allTabItemIds.every((id) => !disabledCategories.includes(id));
-
-  const handleToggleAll = () => {
-    if (allActiveInTab) {
-      // Inactive all in this tab
-      const set = new Set(disabledCategories);
-      allTabItemIds.forEach((id) => set.add(id));
-      onChangeDisabled(Array.from(set));
-    } else {
-      // Active all in this tab
-      const set = new Set(disabledCategories);
-      allTabItemIds.forEach((id) => set.delete(id));
-      onChangeDisabled(Array.from(set));
-    }
-  };
-
-  const toggleParent = (parent: (typeof currentCategories)[number]) => {
-    const set = new Set(disabledCategories);
-    const isCurrentlyDisabled = set.has(parent.id);
-
-    if (isCurrentlyDisabled) {
-      // Activating parent: turn on parent AND all its subcategories
-      set.delete(parent.id);
-      parent.children.forEach((c) => set.delete(c.id));
-    } else {
-      // Deactivating parent: turn off parent AND all its subcategories
-      set.add(parent.id);
-      parent.children.forEach((c) => set.add(c.id));
-    }
-
-    onChangeDisabled(Array.from(set));
-  };
-
-  const toggleChild = (parentId: string, childId: string) => {
-    const set = new Set(disabledCategories);
-    const isChildDisabled = set.has(childId);
-
-    if (isChildDisabled) {
-      // Turning ON subcategory: activate subcategory
-      set.delete(childId);
-      // If parent category is inactive, turn parent category ON too
-      set.delete(parentId);
-    } else {
-      // Turning OFF subcategory: deactivate subcategory
-      set.add(childId);
-    }
-
-    onChangeDisabled(Array.from(set));
-  };
-
-  const matchesSearch = (text: string) =>
-    text.toLowerCase().includes(search.toLowerCase());
-
-  return createPortal(
-    <div className="fixed inset-0 z-[100] bg-[#0c0d10] text-white flex flex-col overscroll-contain">
-      <div className="max-w-lg mx-auto w-full h-full flex flex-col">
-        {/* Top Bar matching Screenshot 3 */}
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-white/8 bg-[#14161b]">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h2 className="text-base font-bold text-white">Category</h2>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleToggleAll}
-          className="text-xs font-bold uppercase tracking-wider text-[var(--color-primary-light)] hover:brightness-110 cursor-pointer"
-        >
-          {allActiveInTab ? "INACTIVE ALL" : "ACTIVE ALL"}
-        </button>
-      </div>
-
-      {/* Search Input */}
-      <div className="p-4 border-b border-white/6 bg-[#111216]">
-        <div className="relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-[#1c1e26] border border-white/8 rounded-2xl pl-10 pr-4 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-[var(--color-primary)]"
-          />
-        </div>
-      </div>
-
-      {/* Tabs matching Screenshot 3: EXPENSE | INCOME | DEBT/LOAN */}
-      <div className="flex border-b border-white/8 bg-[#14161b] text-xs font-bold tracking-wider">
-        <button
-          type="button"
-          onClick={() => setActiveTab("EXPENSE")}
-          className={`flex-1 py-3 text-center transition-colors relative ${
-            activeTab === "EXPENSE" ? "text-white" : "text-slate-500 hover:text-slate-300"
-          }`}
-        >
-          EXPENSE
-          {activeTab === "EXPENSE" && (
-            <div className="absolute bottom-0 left-6 right-6 h-0.5 bg-white rounded-full" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("INCOME")}
-          className={`flex-1 py-3 text-center transition-colors relative ${
-            activeTab === "INCOME" ? "text-white" : "text-slate-500 hover:text-slate-300"
-          }`}
-        >
-          INCOME
-          {activeTab === "INCOME" && (
-            <div className="absolute bottom-0 left-6 right-6 h-0.5 bg-white rounded-full" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("DEBT")}
-          className={`flex-1 py-3 text-center transition-colors relative ${
-            activeTab === "DEBT" ? "text-white" : "text-slate-500 hover:text-slate-300"
-          }`}
-        >
-          DEBT/LOAN
-          {activeTab === "DEBT" && (
-            <div className="absolute bottom-0 left-6 right-6 h-0.5 bg-white rounded-full" />
-          )}
-        </button>
-      </div>
-
-      {/* Category List with Toggle Switches */}
-      <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-4 pb-8">
-        {currentCategories.map((parent) => {
-          const isParentDisabled = disabledCategories.includes(parent.id);
-          const filteredChildren = parent.children.filter(
-            (c) => matchesSearch(parent.name) || matchesSearch(c.name)
-          );
-
-          if (search && !matchesSearch(parent.name) && filteredChildren.length === 0) {
-            return null;
-          }
-
-          return (
-            <div key={parent.id} className="space-y-1">
-              {/* Parent Category Row */}
-              <div className="flex items-center justify-between p-2.5 rounded-2xl bg-[#171920] border border-white/6">
-                <div className="flex items-center gap-3 min-w-0">
-                  <CategoryIcon categoryId={parent.id} size="sm" />
-                  <span className="text-white text-sm font-semibold truncate">
-                    {parent.name}
-                  </span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => toggleParent(parent)}
-                  className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ${
-                    !isParentDisabled ? "bg-[var(--color-primary)]" : "bg-slate-700"
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full bg-white transition-transform duration-200 absolute top-0.5 shadow-md ${
-                      !isParentDisabled ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* Child Subcategories */}
-              {filteredChildren.length > 0 && (
-                <div className="pl-6 space-y-1">
-                  {filteredChildren.map((child) => {
-                    const isChildDisabled = disabledCategories.includes(child.id);
-
-                    return (
-                      <div
-                        key={child.id}
-                        className="flex items-center justify-between p-2 rounded-xl bg-[#14151b] border border-white/4"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <CategoryIcon
-                            categoryId={parent.id}
-                            subCategoryId={child.id}
-                            size="sm"
-                          />
-                          <span className="text-slate-300 text-xs font-medium truncate">
-                            {child.name}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleChild(parent.id, child.id)}
-                          className={`w-9 h-5 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ${
-                            !isChildDisabled ? "bg-[var(--color-primary)]" : "bg-slate-700"
-                          }`}
-                        >
-                          <div
-                            className={`w-4 h-4 rounded-full bg-white transition-transform duration-200 absolute top-0.5 shadow-md ${
-                              !isChildDisabled ? "left-[18px]" : "left-0.5"
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  </div>,
-  document.body
-);
-}
-
-// ── Edit Wallet Modal matching Screenshot 2 ─────────────────────────────────
-interface EditWalletModalProps {
-  wallet: Wallet | null;
-  isOpen: boolean;
-  onClose: () => void;
-  onSaved: (updatedWallet: Wallet) => void;
-  currentUserEmail?: string;
-  currentUserId?: string;
-  currentUserName?: string;
-  onLeaveWallet?: (walletId?: string) => void;
-}
-
-function EditWalletModal({
-  wallet,
-  isOpen,
-  onClose,
-  onSaved,
-  currentUserEmail,
-  currentUserId,
-  currentUserName,
-  onLeaveWallet,
-}: EditWalletModalProps) {
-  const { toast } = useToast();
-  const [name, setName] = useState("");
-  const [currency, setCurrency] = useState("IDR");
-  const [balance, setBalance] = useState("0");
-  const [enableNotification, setEnableNotification] = useState(true);
-  const [excludeFromTotal, setExcludeFromTotal] = useState(false);
-  const [disabledCategories, setDisabledCategories] = useState<string[]>([]);
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
-  const [isKeypadOpen, setIsKeypadOpen] = useState(false);
-  const currencyDropdownRef = useRef<HTMLDivElement>(null);
-  const [showAddMemberInput, setShowAddMemberInput] = useState(false);
-  const [addMemberInput, setAddMemberInput] = useState("");
-  const [invitingMember, setInvitingMember] = useState(false);
-  const [inviteError, setInviteError] = useState("");
-  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
-  const [leaving, setLeaving] = useState(false);
-
-  const balanceRef = useRef(balance);
-  useEffect(() => {
-    balanceRef.current = balance;
-  }, [balance]);
-
-  // Physical keyboard listener while keypad is open
-  useEffect(() => {
-    if (!isKeypadOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setIsKeypadOpen(false);
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (/[+\-×÷*/]/.test(balanceRef.current)) {
-          setBalance(safeEvaluateMath(balanceRef.current));
-        } else {
-          setIsKeypadOpen(false);
-        }
-        return;
-      }
-      if (/^[0-9]$/.test(e.key)) {
-        e.preventDefault();
-        setBalance((prev) => (prev === "0" ? e.key : prev + e.key));
-      } else if (e.key === "." || e.key === ",") {
-        e.preventDefault();
-        setBalance((prev) => {
-          if (!prev) return "0.";
-          if (prev.includes(".")) return prev;
-          return prev + ".";
-        });
-      } else if (["+", "-", "*", "/"].includes(e.key)) {
-        e.preventDefault();
-        const op = e.key === "*" ? "×" : e.key === "/" ? "÷" : e.key;
-        setBalance((prev) => {
-          if (!prev) return prev;
-          const last = prev[prev.length - 1];
-          if (["+", "-", "×", "÷"].includes(last)) return prev.slice(0, -1) + op;
-          return prev + op;
-        });
-      } else if (e.key === "Backspace") {
-        e.preventDefault();
-        setBalance((prev) => prev.slice(0, -1) || "0");
-      } else if (e.key === "c" || e.key === "C" || e.key === "Delete") {
-        e.preventDefault();
-        setBalance("0");
-      }
-    };
-
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isKeypadOpen]);
-
-  // Determine if current user is the owner of this wallet
-  const isOwner = !!(
-    (currentUserId && wallet?.userId && String(wallet.userId) === String(currentUserId)) ||
-    (currentUserEmail && wallet?.ownerEmail && wallet.ownerEmail.toLowerCase() === currentUserEmail.toLowerCase()) ||
-    (!wallet?.userId && !wallet?.ownerEmail)
-  );
-
-  // Owner email: if owner, use currentUserEmail; else use wallet.ownerEmail
-  const ownerEmail = isOwner
-    ? (currentUserEmail || wallet?.ownerEmail || "")
-    : (wallet?.ownerEmail || "");
-
-  // Owner username: if owner, use currentUserName; else use wallet.ownerName
-  const ownerName = isOwner
-    ? (currentUserName || wallet?.ownerName || (ownerEmail ? ownerEmail.split("@")[0] : "Owner"))
-    : (wallet?.ownerName || (ownerEmail ? ownerEmail.split("@")[0] : "Owner"));
-
-  useEffect(() => {
-    if (wallet && isOpen) {
-      setName(wallet.name || "");
-      setCurrency(wallet.currency || "IDR");
-      setBalance(String(wallet.balance || 0));
-      setEnableNotification(wallet.enableNotification ?? true);
-      setExcludeFromTotal(wallet.excludeFromTotal ?? wallet.excludeFromReport ?? false);
-      setDisabledCategories(wallet.disabledCategories || []);
-    }
-  }, [wallet, isOpen]);
-
-  // Lock background scroll when EditWalletModal is open
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  // Close currency dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent | TouchEvent) => {
-      if (currencyDropdownRef.current && !currencyDropdownRef.current.contains(e.target as Node)) {
-        setIsCurrencyDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    document.addEventListener("touchstart", handler);
-    return () => {
-      document.removeEventListener("mousedown", handler);
-      document.removeEventListener("touchstart", handler);
-    };
-  }, []);
-
-  const handleInviteMember = async () => {
-    if (!addMemberInput.trim() || invitingMember || !wallet) return;
-    setInvitingMember(true);
-    setInviteError("");
-    try {
-      const res = await fetch("/api/finance/wallets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: wallet._id, shareEmail: addMemberInput.trim() }),
-      });
-      const d = await res.json();
-      if (!res.ok) {
-        setInviteError(d.error || "Failed to invite member.");
-      } else {
-        if (d.wallet) onSaved(d.wallet);
-        toast("Invitation sent!", "success");
-        setAddMemberInput("");
-        setShowAddMemberInput(false);
-        setInviteError("");
-      }
-    } catch {
-      setInviteError("Network error. Please try again.");
-    } finally {
-      setInvitingMember(false);
-    }
-  };
-
-  const handleRemoveMember = async (memberEmail: string, isCancel: boolean = false) => {
-    if (!wallet) return;
-    try {
-      const res = await fetch("/api/finance/wallets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: wallet._id, removeShareEmail: memberEmail }),
-      });
-      const d = await res.json();
-      if (res.ok && d.wallet) {
-        onSaved(d.wallet);
-        toast(isCancel ? "Invitation cancelled" : "Member deleted", "info");
-      } else {
-        toast(d.error || (isCancel ? "Failed to cancel invitation" : "Failed to delete member"), "error");
-      }
-    } catch {
-      toast("Network error", "error");
-    }
-  };
-
-  const handleLeaveWallet = async () => {
-    if (!wallet) return;
-    setLeaving(true);
-    try {
-      const res = await fetch("/api/finance/wallets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: wallet._id, leaveWallet: true }),
-      });
-      const d = await res.json();
-      if (res.ok) {
-        toast(`You left "${wallet.name}"`, "info");
-        setLeaveConfirmOpen(false);
-        onClose();
-        onLeaveWallet?.(wallet._id);
-      } else {
-        toast(d.error || "Failed to leave wallet", "error");
-      }
-    } catch {
-      toast("Network error", "error");
-    } finally {
-      setLeaving(false);
-    }
-  };
-
-  if (!isOpen || !wallet) return null;
-
-  // Calculate total number of categories
-  let totalCategoriesCount = 0;
-  CATEGORIES_TREE.forEach((p) => {
-    totalCategoriesCount += 1;
-    totalCategoriesCount += p.children.length;
-  });
-  const activeCategoriesCount = Math.max(
-    0,
-    totalCategoriesCount - disabledCategories.length
-  );
-
-  const handleSave = async () => {
-    if (!name.trim()) {
-      toast("Wallet name cannot be empty", "error");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const res = await fetch("/api/finance/wallets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: wallet._id,
-          name: name.trim(),
-          currency,
-          balance: parseFloat(safeEvaluateMath(balance).replace(/,/g, "")) || 0,
-          enableNotification,
-          excludeFromTotal,
-          disabledCategories,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        toast("Wallet updated successfully", "success");
-        onSaved(data.wallet);
-        onClose();
-      } else {
-        toast("Failed to update wallet", "error");
-      }
-    } catch {
-      toast("Error updating wallet", "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const currInfo = CURRENCY_INFO[currency as SupportedCurrency] || {
-    name: currency,
-    symbol: currency,
-    displayCode: currency,
-  };
-
-  return (
-    <div className={`fixed inset-0 z-[70] bg-[#111216] text-white flex flex-col ${isCategoryModalOpen ? "overflow-hidden" : "overflow-y-auto"}`}>
-      <div className="max-w-lg mx-auto w-full min-h-screen flex flex-col p-4 pb-28">
-        <div>
-          {/* Top Bar matching Screenshot 2 */}
-          <div className="flex items-center justify-between py-3 border-b border-white/6 mb-4">
-            <button
-              onClick={onClose}
-              className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-300 hover:text-white"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <h2 className="text-white text-base font-bold">Edit wallet</h2>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="text-white text-sm font-bold tracking-wider hover:text-[var(--color-primary-light)] active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
-            >
-              {saving ? "SAVING…" : "SAVE"}
-            </button>
-          </div>
-
-          {/* Wallet Name & Icon matching Screenshot 2 */}
-          <div className="p-4 bg-[#181920] border border-white/6 rounded-2xl flex items-center gap-4 mb-3">
-            <div className="w-12 h-12 rounded-2xl bg-amber-600/20 flex items-center justify-center text-2xl flex-shrink-0">
-              <WalletGraphic size={44} />
-            </div>
-            <div className="flex-1">
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Wallet name"
-                className="w-full bg-transparent text-xl font-bold text-white outline-none placeholder-slate-500"
-              />
-            </div>
-          </div>
-
-          {/* Currency row — compact badge button opens inline floating dropdown */}
-          <div className="p-4 bg-[#181920] border border-white/6 rounded-2xl relative z-20 mb-3" ref={currencyDropdownRef}>
-            <button
-              type="button"
-              onClick={() => setIsCurrencyDropdownOpen((v) => !v)}
-              className="w-full flex items-center justify-between text-left cursor-pointer group"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-300 group-hover:text-white transition-colors">
-                  <Coins className="w-4 h-4" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <CurrencyFlag
-                    flag={CURRENCY_INFO[currency as SupportedCurrency]?.flag ?? ""}
-                    code={currency}
-                    className="text-lg"
-                  />
-                  <span className="text-white text-base font-semibold group-hover:text-[var(--color-primary-light)] transition-colors">{currInfo.name}</span>
-                </div>
-              </div>
-
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1b1d24] border border-white/8 hover:border-white/15 transition-all text-xs font-bold text-slate-200 shadow-sm active:scale-95">
-                <span>{currInfo.displayCode}</span>
-                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isCurrencyDropdownOpen ? "rotate-180" : ""}`} />
-              </div>
-            </button>
-
-            {isCurrencyDropdownOpen && (
-              <div className="absolute right-4 top-[calc(100%+6px)] z-[85] w-60 max-h-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left">
-                {SUPPORTED_CURRENCIES.map((code) => {
-                  const info = CURRENCY_INFO[code];
-                  const isSelected = currency === code;
-                  return (
-                    <button
-                      key={code}
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setCurrency(code);
-                        setIsCurrencyDropdownOpen(false);
-                      }}
-                      className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
-                        isSelected
-                          ? "bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)]"
-                          : "text-slate-300 hover:bg-white/5"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <CurrencyFlag flag={info.flag} code={code} className="text-base flex-shrink-0" />
-                        <div className="truncate">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-white">{info.displayCode}</span>
-                            <span className="text-[11px] text-slate-400">({info.symbol})</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 font-normal truncate">{info.name}</p>
-                        </div>
-                      </div>
-                      {isSelected && <Check className="w-4 h-4 text-[var(--color-primary-light)] flex-shrink-0 ml-2" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Balance card with Custom Keypad Trigger */}
-          <div className="p-5 bg-[#181920] border border-white/6 rounded-2xl mb-3">
-            <p className="text-slate-400 text-xs font-medium mb-1">
-              Enter current balance of this wallet
-            </p>
-            <div
-              className={`py-2 flex items-center gap-3 cursor-text border-b-2 transition-colors duration-200 ${
-                isKeypadOpen ? "border-[var(--color-primary-light)]" : "border-[var(--color-primary)]/40"
-              }`}
-              onClick={() => setIsKeypadOpen(true)}
-            >
-              <span className="px-2.5 py-1 rounded-lg bg-white/10 text-slate-300 text-xs font-bold flex-shrink-0">
-                {currInfo.displayCode}
-              </span>
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  inputMode="none"
-                  readOnly
-                  value={formatThousands(balance)}
-                  onClick={() => setIsKeypadOpen(true)}
-                  className="w-full bg-transparent text-2xl font-extrabold text-[#29b6f6] placeholder-[#29b6f6]/40 outline-none tracking-tight cursor-text select-none"
-                />
-                {isKeypadOpen && (
-                  <span className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-7 bg-[#29b6f6] animate-pulse rounded-full" />
-                )}
-              </div>
-            </div>
-            {!isKeypadOpen && (
-              <p className="mt-1 text-[10px] text-slate-500">Tap to edit balance using keypad</p>
-            )}
-          </div>
-
-          {/* Categories Option matching Screenshot 2 */}
-          <button
-            type="button"
-            onClick={() => setIsCategoryModalOpen(true)}
-            className="w-full p-4 bg-[#181920] border border-white/6 rounded-2xl flex items-center justify-between hover:bg-white/5 transition-colors cursor-pointer mb-4"
-          >
-            <div className="flex items-center gap-3.5">
-              <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-300">
-                <Package className="w-4 h-4" />
-              </div>
-              <div className="text-left">
-                <p className="text-white text-sm font-semibold">Categories</p>
-                <p className="text-slate-400 text-xs">
-                  {activeCategoriesCount} categories
-                </p>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-slate-500" />
-          </button>
-
-          {/* Members section matching Screenshot 2 */}
-          <div className="p-4 bg-[#181920] border border-white/6 rounded-2xl mb-3 space-y-3">
-            <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider">
-              Members
-            </h4>
-
-            {/* Owner row */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-white font-bold text-base flex-shrink-0">
-                  {((ownerName || ownerEmail || "O")[0]).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-white text-sm font-bold truncate">{ownerName || "Owner"}</p>
-                  <p className="text-slate-400 text-xs truncate">{ownerEmail || ""}</p>
-                </div>
-              </div>
-              <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-md font-bold flex-shrink-0 ml-2">
-                Owner
-              </span>
-            </div>
-
-            {/* Shared members */}
-            {wallet.sharedWith
-              ?.filter((m) => {
-                // Non-owners only see ACCEPTED members
-                if (!isOwner) return m.status === "ACCEPTED";
-                // Owner sees ACCEPTED and PENDING (and legacy entries without status)
-                return m.status === "ACCEPTED" || m.status === "PENDING" || !m.status;
-              })
-              .map((m) => {
-                const isPending = m.status === "PENDING" || !m.status;
-                const displayName = m.name || m.email.split("@")[0];
-                return (
-                  <div key={m.email} className="flex items-center justify-between pt-2.5 border-t border-white/5">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-xs flex-shrink-0">
-                        {((displayName || m.email || "?")[0]).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-white text-xs font-semibold truncate">
-                          {displayName}
-                        </p>
-                        <p className="text-[11px] text-slate-400 truncate">
-                          {m.email}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                      {/* Pending label */}
-                      {isPending && (
-                        <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/25 px-2 py-0.5 rounded-md font-semibold tracking-wide">
-                          Pending
-                        </span>
-                      )}
-
-                      {/* Cancel button - owner only, for pending members */}
-                      {isOwner && isPending && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMember(m.email, true)}
-                          className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/20 transition-all cursor-pointer flex items-center gap-1"
-                          title="Cancel invitation"
-                        >
-                          <X className="w-3 h-3" />
-                          <span>Cancel</span>
-                        </button>
-                      )}
-
-                      {/* Delete member button - owner only, for accepted members */}
-                      {isOwner && !isPending && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMember(m.email, false)}
-                          className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/20 transition-all cursor-pointer flex items-center gap-1"
-                          title="Delete member"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Delete</span>
-                        </button>
-                      )}
-
-                      {/* Leave button - non-owner member sees this for their own row */}
-                      {!isOwner && m.email.toLowerCase() === (currentUserEmail || "").toLowerCase() && (
-                        <button
-                          type="button"
-                          onClick={() => setLeaveConfirmOpen(true)}
-                          disabled={leaving}
-                          className="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/20 transition-all cursor-pointer flex items-center gap-1 active:scale-95 disabled:opacity-50"
-                          title="Leave wallet"
-                        >
-                          <LogOut className="w-3 h-3" />
-                          <span>{leaving ? "Leaving…" : "Leave"}</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-            {/* Add Member — owner only */}
-            {isOwner && (
-              showAddMemberInput ? (
-                <div className="pt-2 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="Enter user email or username..."
-                      value={addMemberInput}
-                      onChange={(e) => { setAddMemberInput(e.target.value); setInviteError(""); }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          handleInviteMember();
-                        }
-                      }}
-                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[var(--color-primary)]"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      disabled={!addMemberInput.trim() || invitingMember}
-                      onClick={handleInviteMember}
-                      className="px-3 py-1.5 rounded-xl bg-[var(--color-primary)] hover:brightness-110 active:scale-95 text-white text-xs font-bold disabled:opacity-50 transition-all cursor-pointer"
-                    >
-                      {invitingMember ? "Inviting…" : "Invite"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setShowAddMemberInput(false); setAddMemberInput(""); setInviteError(""); }}
-                      className="p-1.5 text-slate-400 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  {/* Inline error */}
-                  {inviteError && (
-                    <div className="flex items-center gap-1.5 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
-                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{inviteError}</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowAddMemberInput(true)}
-                  className="flex items-center gap-2 text-xs font-bold text-[var(--color-primary-light)] hover:brightness-110 pt-2 cursor-pointer"
-                >
-                  <div className="w-5 h-5 rounded-full bg-[var(--color-primary-subtle)] flex items-center justify-center">
-                    <Plus className="w-3.5 h-3.5 text-[var(--color-primary-light)]" />
-                  </div>
-                  <span>ADD MEMBER</span>
-                </button>
-              )
-            )}
-          </div>
-
-          {/* Toggle Switches matching Screenshot 2 */}
-          <div className="p-4 bg-[#181920] border border-white/6 rounded-2xl space-y-4">
-            {/* Enable Notification */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-white text-sm font-semibold">Enable Notification</p>
-                <p className="text-slate-400 text-xs">
-                  Get notified when there are changes to this wallet&apos;s transactions.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setEnableNotification((prev) => !prev)}
-                className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ml-3 ${
-                  enableNotification ? "bg-[var(--color-primary)]" : "bg-slate-700"
-                }`}
-              >
-                <div
-                  className={`w-5 h-5 rounded-full bg-white transition-transform duration-200 absolute top-0.5 shadow-md ${
-                    enableNotification ? "left-[22px]" : "left-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Excluded from Total */}
-            <div className="flex items-center justify-between pt-3 border-t border-white/5">
-              <div>
-                <p className="text-white text-sm font-semibold">Excluded from Total</p>
-                <p className="text-slate-400 text-xs">
-                  Ignore this wallet and its balance in the &quot;Total&quot;
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setExcludeFromTotal((prev) => !prev)}
-                className={`w-11 h-6 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ml-3 ${
-                  excludeFromTotal ? "bg-[var(--color-primary)]" : "bg-slate-700"
-                }`}
-              >
-                <div
-                  className={`w-5 h-5 rounded-full bg-white transition-transform duration-200 absolute top-0.5 shadow-md ${
-                    excludeFromTotal ? "left-[22px]" : "left-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* Bottom margin / padding spacer for comfortable scrolling */}
-          <div className="h-16" />
-        </div>
-      </div>
-
-      {/* Floating Custom Keypad popup */}
-      <AnimatePresence>
-        {isKeypadOpen && (
-          <>
-            <motion.div
-              key="edit-wallet-keypad-overlay"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              onClick={() => setIsKeypadOpen(false)}
-              className="fixed inset-0 z-[85] bg-black/50"
-            />
-            <motion.div
-              key="edit-wallet-keypad-panel"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 30, stiffness: 350 }}
-              className="fixed bottom-0 left-0 right-0 z-[90] w-full max-w-lg mx-auto bg-[#18191f] border-t border-white/10 rounded-t-3xl shadow-2xl px-4 pt-3 pb-safe"
-            >
-              <div className="flex justify-center mb-3">
-                <div className="w-10 h-1 rounded-full bg-white/20" />
-              </div>
-              <div className="flex items-center justify-between px-2 pb-3 border-b border-white/6 mb-2">
-                <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Balance</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 bg-white/6 px-2 py-0.5 rounded-lg">
-                    {currInfo.displayCode}
-                  </span>
-                  <span className="text-2xl font-extrabold text-[#29b6f6] tracking-tight">
-                    {formatThousands(balance) || "0"}
-                  </span>
-                </div>
-              </div>
-              <CustomKeypad
-                value={balance}
-                onChange={(val) => setBalance(val)}
-                onSubmit={() => {
-                  if (/[+\-×÷*/]/.test(balance)) {
-                    setBalance(safeEvaluateMath(balance));
-                  } else {
-                    setIsKeypadOpen(false);
-                  }
-                }}
-                showQuickChips={false}
-              />
-              <div className="flex items-center gap-3 px-2 pt-3 pb-5 border-t border-white/8 mt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (/[+\-×÷*/]/.test(balance)) {
-                      setBalance(safeEvaluateMath(balance));
-                    }
-                    setIsKeypadOpen(false);
-                  }}
-                  className="flex-1 py-3 rounded-full bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] text-center cursor-pointer"
-                  style={{ boxShadow: "0 6px 16px var(--color-primary-glow)" }}
-                >
-                  Done
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Nested Category Selector Modal */}
-      <WalletCategorySelectionModal
-        isOpen={isCategoryModalOpen}
-        onClose={() => setIsCategoryModalOpen(false)}
-        disabledCategories={disabledCategories}
-        onChangeDisabled={(newDisabled) => setDisabledCategories(newDisabled)}
-      />
-      {/* Confirm Leave Wallet Dialog */}
-      <AnimatePresence>
-        {leaveConfirmOpen && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setLeaveConfirmOpen(false)}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ scale: 0.92, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.92, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 350 }}
-              className="relative z-10 w-full max-w-xs bg-[#1a1c23] border border-white/10 rounded-3xl p-6 shadow-2xl text-center"
-            >
-              <div className="w-12 h-12 mx-auto mb-4 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                <LogOut className="w-6 h-6 text-red-400" />
-              </div>
-              <h4 className="text-white font-bold text-base mb-1">Leave wallet?</h4>
-              <p className="text-slate-400 text-sm mb-5">
-                Are you sure you want to leave <span className="text-white font-semibold">{wallet.name}</span>? You will no longer have access to this wallet.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setLeaveConfirmOpen(false)}
-                  className="flex-1 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-sm transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLeaveWallet}
-                  disabled={leaving}
-                  className="flex-1 py-2.5 rounded-2xl bg-red-500 hover:bg-red-400 text-white font-bold text-sm transition-colors disabled:opacity-50"
-                >
-                  {leaving ? "Leaving…" : "Leave"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 // ── Draggable Wallet Item for Drag & Drop Reordering ────────────────────────
 function DraggableWalletItem({
   wallet,
   currentUserEmail,
   onOpenMenu,
+  onSelectWallet,
 }: {
   wallet: Wallet;
   currentUserEmail: string;
   onOpenMenu: (walletId: string, rect: DOMRect) => void;
+  onSelectWallet?: (walletId: string) => void;
 }) {
   const dragControls = useDragControls();
   const isMember = Boolean(
@@ -1241,33 +198,38 @@ function DraggableWalletItem({
           <GripVertical className="w-4 h-4" />
         </button>
 
-        <WalletGraphic size={40} />
+        <div
+          onClick={() => onSelectWallet?.(wallet._id)}
+          className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+        >
+          <WalletGraphic size={40} />
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-white font-bold text-sm truncate">{wallet.name}</p>
-            {wallet.isDefault && (
-              <span className="text-[10px] bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] border border-[var(--color-primary-border)] px-2 py-0.5 rounded-full font-bold">
-                Default
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-white font-bold text-sm truncate">{wallet.name}</p>
+              {wallet.isDefault && (
+                <span className="text-[10px] bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] border border-[var(--color-primary-border)] px-2 py-0.5 rounded-full font-bold">
+                  Default
+                </span>
+              )}
+              {isMember && (
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-medium">
+                  {ownerDisplayName}&apos;s wallet
+                </span>
+              )}
+              {wallet.archived && (
+                <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-medium">
+                  Archived
+                </span>
+              )}
+            </div>
+            <p className="text-slate-400 text-xs">
+              {formatMoney(wallet.balance, wallet.currency)}{" "}
+              <span className="text-slate-500">
+                · {getCurrencyDisplayCode(wallet.currency)}
               </span>
-            )}
-            {isMember && (
-              <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full font-medium">
-                {ownerDisplayName}&apos;s wallet
-              </span>
-            )}
-            {wallet.archived && (
-              <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-medium">
-                Archived
-              </span>
-            )}
+            </p>
           </div>
-          <p className="text-slate-400 text-xs">
-            {formatMoney(wallet.balance, wallet.currency)}{" "}
-            <span className="text-slate-500">
-              · {getCurrencyDisplayCode(wallet.currency)}
-            </span>
-          </p>
         </div>
       </div>
 
@@ -1295,8 +257,8 @@ export default function WalletManagerModal({
   wallets: initialWallets,
   onWalletUpdated,
 }: WalletManagerModalProps) {
-  const router = useRouter();
   const { toast } = useToast();
+  const router = useRouter();
   const [wallets, setWallets] = useState<Wallet[]>(initialWallets);
   const [showAddForm, setShowAddForm] = useState(false);
   const [name, setName] = useState("");
@@ -1344,9 +306,6 @@ export default function WalletManagerModal({
   const [activeMenuWalletId, setActiveMenuWalletId] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
 
-  // Edit Wallet modal state
-  const [editingWallet, setEditingWallet] = useState<Wallet | null>(null);
-
   // Transfer modal state
   const [transferOpen, setTransferOpen] = useState(false);
 
@@ -1392,10 +351,11 @@ export default function WalletManagerModal({
           })
           .catch(() => {});
       }
+
       fetch("/api/finance/wallets")
         .then((r) => r.json())
         .then((d) => {
-          if (d.wallets && Array.isArray(d.wallets)) {
+          if (Array.isArray(d.wallets)) {
             setWallets(d.wallets);
           }
         })
@@ -1403,31 +363,36 @@ export default function WalletManagerModal({
     }
   }, [isOpen, currentUserId]);
 
-  const syncedWallets = wallets;
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncedWallets = [...wallets].sort((a, b) => {
+    if (a.archived && !b.archived) return 1;
+    if (!a.archived && b.archived) return -1;
+    if (a.isDefault && !b.isDefault) return -1;
+    if (!a.isDefault && b.isDefault) return 1;
+    return (a.order ?? 0) - (b.order ?? 0);
+  });
 
-  const handleReorder = (newOrder: Wallet[]) => {
-    setActiveMenuWalletId(null);
-    setMenuPosition(null);
-    setWallets(newOrder);
-    onWalletUpdated(newOrder);
+  const handleReorder = async (newOrder: Wallet[]) => {
+    const updated = newOrder.map((w, index) => ({ ...w, order: index }));
+    setWallets(updated);
+    onWalletUpdated(updated);
 
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        await fetch("/api/finance/wallets/reorder", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ walletIds: newOrder.map((w) => w._id) }),
-        });
-      } catch (err) {
-        console.error("Failed to save wallet order", err);
-      }
-    }, 400);
+    try {
+      const reorderPayload = updated.map((w) => ({
+        id: w._id,
+        order: w.order,
+      }));
+      await fetch("/api/finance/wallets/reorder", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallets: reorderPayload }),
+      });
+    } catch {
+      toast("Failed to save wallet order", "error");
+    }
   };
 
   const handleCreate = async () => {
-    if (!name) return;
+    if (!name.trim()) return;
     setSaving(true);
     try {
       const res = await fetch("/api/finance/wallets", {
@@ -1436,144 +401,166 @@ export default function WalletManagerModal({
         body: JSON.stringify({
           name: name.trim(),
           type,
-          icon: TYPE_DEFAULT_ICONS[type] || "💳",
-          balance: parseFloat(balance) || 0,
           currency,
-          isDefault: syncedWallets.length === 0,
+          balance: parseFloat(balance) || 0,
+          icon: TYPE_DEFAULT_ICONS[type] || "💳",
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        const updated = [...syncedWallets, data.wallet];
+        const updated = [...wallets, data.wallet];
         setWallets(updated);
-        setShowAddForm(false);
+        onWalletUpdated(updated);
         setName("");
-        setType("CASH");
         setBalance("");
+        setType("CASH");
         setCurrency("IDR");
+        setShowAddForm(false);
         setIsCreateTypeDropdownOpen(false);
         setIsCreateCurrencyDropdownOpen(false);
-        toast(`Wallet "${name}" created`, "success");
-        onWalletUpdated(updated);
+        toast("Wallet created successfully", "success");
       } else {
         toast("Failed to create wallet", "error");
       }
+    } catch {
+      toast("Error creating wallet", "error");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleSetDefault = async (id: string) => {
-    setActiveMenuWalletId(null);
-    const res = await fetch("/api/finance/wallets", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, isDefault: true }),
-    });
+  const handleSetDefault = async (walletId: string) => {
+    try {
+      const res = await fetch("/api/finance/wallets", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: walletId, isDefault: true }),
+      });
 
-    if (res.ok) {
-      const updated = syncedWallets.map((w) => ({ ...w, isDefault: w._id === id }));
-      setWallets(updated);
-      const w = syncedWallets.find((w) => w._id === id);
-      toast(`"${w?.name}" is now the default wallet`, "success");
-      onWalletUpdated(updated);
-      window.dispatchEvent(
-        new CustomEvent("wallet-default-changed", {
-          detail: { wallets: updated, defaultId: id },
-        })
-      );
-    } else {
-      toast("Failed to set default wallet", "error");
+      if (res.ok) {
+        const updated = wallets.map((w) => ({
+          ...w,
+          isDefault: w._id === walletId,
+        }));
+        setWallets(updated);
+        onWalletUpdated(updated);
+        toast("Default wallet updated", "success");
+      } else {
+        toast("Failed to set default wallet", "error");
+      }
+    } catch {
+      toast("Error setting default wallet", "error");
     }
   };
 
-  const handleToggleArchive = async (w: Wallet) => {
-    setActiveMenuWalletId(null);
-    const nextArchived = !w.archived;
-    const res = await fetch("/api/finance/wallets", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: w._id, archived: nextArchived }),
-    });
+  const handleToggleArchive = async (wallet: Wallet) => {
+    try {
+      const res = await fetch("/api/finance/wallets", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: wallet._id, archived: !wallet.archived }),
+      });
 
-    if (res.ok) {
-      const updated = syncedWallets.map((item) =>
-        item._id === w._id ? { ...item, archived: nextArchived } : item
-      );
-      setWallets(updated);
-      toast(nextArchived ? `"${w.name}" archived` : `"${w.name}" unarchived`, "info");
-      onWalletUpdated(updated);
+      if (res.ok) {
+        const updated = wallets.map((w) =>
+          w._id === wallet._id ? { ...w, archived: !w.archived } : w
+        );
+        setWallets(updated);
+        onWalletUpdated(updated);
+        toast(
+          wallet.archived ? "Wallet unarchived" : "Wallet archived",
+          "success"
+        );
+      } else {
+        toast("Failed to update wallet", "error");
+      }
+    } catch {
+      toast("Error updating wallet", "error");
     }
   };
 
   const handleDeleteConfirmed = async () => {
-    const { walletId, walletName } = confirm;
+    const { walletId } = confirm;
     setConfirm({ open: false, walletId: "", walletName: "" });
+    try {
+      const res = await fetch(`/api/finance/wallets?id=${walletId}`, {
+        method: "DELETE",
+      });
 
-    const res = await fetch(`/api/finance/wallets?id=${walletId}`, { method: "DELETE" });
-    if (res.ok) {
-      const updated = syncedWallets.filter((w) => w._id !== walletId);
-      setWallets(updated);
-      toast(`"${walletName}" deleted`, "info");
-      onWalletUpdated(updated);
-    } else {
-      toast("Failed to delete wallet", "error");
+      if (res.ok) {
+        const updated = wallets.filter((w) => w._id !== walletId);
+        setWallets(updated);
+        onWalletUpdated(updated);
+        toast("Wallet deleted", "success");
+      } else {
+        toast("Failed to delete wallet", "error");
+      }
+    } catch {
+      toast("Error deleting wallet", "error");
     }
   };
 
   const handleLeaveConfirmed = async () => {
     const { walletId, walletName } = leaveConfirm;
     setLeaveConfirm({ open: false, walletId: "", walletName: "" });
-
     try {
       const res = await fetch("/api/finance/wallets", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: walletId, leaveWallet: true }),
       });
-      const data = await res.json();
+
       if (res.ok) {
-        const updated = syncedWallets.filter((w) => w._id !== walletId);
+        const updated = wallets.filter((w) => w._id !== walletId);
         setWallets(updated);
-        toast(`You left "${walletName}"`, "info");
         onWalletUpdated(updated);
+        toast(`You left "${walletName}"`, "info");
       } else {
-        toast(data.error || "Failed to leave wallet", "error");
+        toast("Failed to leave wallet", "error");
       }
     } catch {
-      toast("Failed to leave wallet", "error");
+      toast("Error leaving wallet", "error");
     }
   };
+
+  const handleEditWallet = (walletId: string) => {
+    onClose();
+    router.push(`/wallets/${walletId}`);
+  };
+
+  if (!isOpen) return null;
 
   return (
     <>
       <AnimatePresence>
         {isOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={onClose}
-              className="fixed inset-0 bg-black/80 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm"
             />
 
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 15 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              className="relative w-full max-w-md bg-[#16171b] border border-white/10 rounded-3xl p-6 shadow-2xl flex flex-col max-h-[85vh] z-10"
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative z-10 w-full max-w-md bg-[#131418] border border-white/10 rounded-3xl p-6 shadow-2xl max-h-[85vh] flex flex-col"
             >
               {/* Header */}
               <div className="flex items-center justify-between pb-4 border-b border-white/8">
                 <div>
                   <h3 className="text-white font-bold text-lg">My Wallets</h3>
-                  <p className="text-slate-400 text-xs">Manage cash and accounts</p>
+                  <p className="text-slate-400 text-xs">
+                    Manage your financial accounts
+                  </p>
                 </div>
                 <button
                   onClick={onClose}
-                  className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white"
+                  className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1611,6 +598,7 @@ export default function WalletManagerModal({
                           key={w._id}
                           wallet={w}
                           currentUserEmail={currentUserEmail}
+                          onSelectWallet={handleEditWallet}
                           onOpenMenu={(id, rect) => {
                             if (activeMenuWalletId === id) {
                               setActiveMenuWalletId(null);
@@ -1844,14 +832,14 @@ export default function WalletManagerModal({
                           setIsCreateTypeDropdownOpen(false);
                           setIsCreateCurrencyDropdownOpen(false);
                         }}
-                        className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-semibold transition-colors"
+                        className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-semibold transition-colors cursor-pointer"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleCreate}
                         disabled={saving || !name}
-                        className="flex-1 py-2.5 rounded-xl text-white text-xs font-bold transition-opacity hover:opacity-90 disabled:opacity-50"
+                        className="flex-1 py-2.5 rounded-xl text-white text-xs font-bold transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer"
                         style={{ backgroundColor: "var(--color-primary)" }}
                       >
                         {saving ? "Creating…" : "Save Wallet"}
@@ -1866,7 +854,7 @@ export default function WalletManagerModal({
                 <div className="pt-3 border-t border-white/8">
                   <button
                     onClick={() => setShowAddForm(true)}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-white font-bold text-sm transition-opacity hover:opacity-90"
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-white font-bold text-sm transition-opacity hover:opacity-90 cursor-pointer"
                     style={{
                       backgroundColor: "var(--color-primary)",
                       boxShadow: "var(--color-primary-glow)",
@@ -1898,7 +886,7 @@ export default function WalletManagerModal({
 
           return createPortal(
             <>
-              {/* Transparent backdrop overlay: clicking anywhere outside closes the menu */}
+              {/* Transparent backdrop overlay */}
               <div
                 className="fixed inset-0 z-[98] bg-transparent cursor-default"
                 onClick={(e) => {
@@ -1963,13 +951,13 @@ export default function WalletManagerModal({
                     <span>Adjust balance</span>
                   </button>
 
-                  {/* 3. Edit */}
+                  {/* 3. Edit -> Redirects to dedicated URL */}
                   <button
                     type="button"
                     onClick={() => {
                       setActiveMenuWalletId(null);
                       setMenuPosition(null);
-                      setEditingWallet(targetWallet);
+                      handleEditWallet(targetWallet._id);
                     }}
                     className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-200 hover:bg-white/5 hover:text-white transition-colors text-left cursor-pointer"
                   >
@@ -2009,7 +997,7 @@ export default function WalletManagerModal({
                       className="w-full flex items-center gap-2.5 px-3.5 py-2 text-red-400 hover:bg-red-500/10 transition-colors text-left cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
+                      <span>Delete wallet</span>
                     </button>
                   ) : (
                     <button
@@ -2035,29 +1023,6 @@ export default function WalletManagerModal({
             document.body
           );
         })()}
-
-      {/* Edit Wallet Modal */}
-      <EditWalletModal
-        wallet={editingWallet}
-        isOpen={Boolean(editingWallet)}
-        onClose={() => setEditingWallet(null)}
-        currentUserEmail={currentUserEmail}
-        currentUserId={currentUserId}
-        currentUserName={currentUserName}
-        onLeaveWallet={(leftId?: string) => {
-          const targetId = leftId || editingWallet?._id;
-          const list = wallets.filter((w) => w._id !== targetId);
-          setWallets(list);
-          setEditingWallet(null);
-          onWalletUpdated(list);
-        }}
-        onSaved={(updated) => {
-          const list = wallets.map((w) => (w._id === updated._id ? updated : w));
-          setWallets(list);
-          setEditingWallet(updated);
-          onWalletUpdated(list);
-        }}
-      />
 
       {/* Transfer Modal */}
       <TransferModal
@@ -2099,13 +1064,13 @@ export default function WalletManagerModal({
               <div className="flex gap-3">
                 <button
                   onClick={() => setConfirm({ open: false, walletId: "", walletName: "" })}
-                  className="flex-1 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-sm transition-colors"
+                  className="flex-1 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-sm transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleDeleteConfirmed}
-                  className="flex-1 py-2.5 rounded-2xl bg-red-500 hover:bg-red-400 text-white font-bold text-sm transition-colors"
+                  className="flex-1 py-2.5 rounded-2xl bg-red-500 hover:bg-red-400 text-white font-bold text-sm transition-colors cursor-pointer"
                 >
                   Delete
                 </button>
@@ -2143,13 +1108,13 @@ export default function WalletManagerModal({
               <div className="flex gap-3">
                 <button
                   onClick={() => setLeaveConfirm({ open: false, walletId: "", walletName: "" })}
-                  className="flex-1 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-sm transition-colors"
+                  className="flex-1 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-sm transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleLeaveConfirmed}
-                  className="flex-1 py-2.5 rounded-2xl bg-red-500 hover:bg-red-400 text-white font-bold text-sm transition-colors"
+                  className="flex-1 py-2.5 rounded-2xl bg-red-500 hover:bg-red-400 text-white font-bold text-sm transition-colors cursor-pointer"
                 >
                   Leave
                 </button>

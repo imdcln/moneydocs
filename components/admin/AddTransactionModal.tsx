@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -18,6 +18,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAdminModal } from "@/hooks/useAdminModal";
+import { useKeyboardOffset } from "@/hooks/useKeyboardOffset";
 import {
   SUPPORTED_CURRENCIES,
   convertCurrency,
@@ -48,7 +49,12 @@ export default function AddTransactionModal() {
     wallets,
     selectedWalletId: globalSelectedWalletId,
     refreshWallets,
+    getPermissionsForWallet,
   } = useWalletContext();
+
+  const creatableWallets = useMemo(() => {
+    return (wallets as any[]).filter((w) => getPermissionsForWallet(w._id).transactions.create);
+  }, [wallets, getPermissionsForWallet]);
 
   const [rates, setRates] = useState<Record<string, number>>({});
 
@@ -126,6 +132,10 @@ export default function AddTransactionModal() {
   const [categoryError, setCategoryError] = useState(false);
   const [navigatingToEvents, setNavigatingToEvents] = useState(false);
 
+  const keyboardHeight = useKeyboardOffset();
+  const [isScrolledDown, setIsScrolledDown] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const focusScrollTopRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const handleKeypadSubmitRef = useRef<() => void>(() => {});
 
@@ -152,11 +162,11 @@ export default function AddTransactionModal() {
       // Pick the wallet to pre-select:
       // 1. If a specific wallet is globally selected, use it.
       // 2. Otherwise fall back to the marked-default, then the first wallet.
-      if (wallets.length > 0) {
+      if (creatableWallets.length > 0) {
         const preSelected =
-          (globalSelectedWalletId !== "ALL" && wallets.find((w) => w._id === globalSelectedWalletId)) ||
-          wallets.find((w) => w.isDefault) ||
-          wallets[0];
+          (globalSelectedWalletId !== "ALL" && creatableWallets.find((w) => w._id === globalSelectedWalletId)) ||
+          creatableWallets.find((w) => w.isDefault) ||
+          creatableWallets[0];
         if (preSelected) {
           setWalletId(preSelected._id);
           setCurrency(preSelected.currency || "IDR");
@@ -523,8 +533,27 @@ export default function AddTransactionModal() {
     finally { setSaving(false); }
   };
 
-  const handleKeypadSubmit = () => {
-    if (/[+\-*/\u00d7\u00f7]/.test(rawAmount)) {
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const currentScrollTop = e.currentTarget.scrollTop;
+    if (isDescFocused) {
+      if (currentScrollTop - focusScrollTopRef.current > 30) {
+        setIsScrolledDown(true);
+      } else if (currentScrollTop - focusScrollTopRef.current <= 10) {
+        setIsScrolledDown(false);
+      }
+    }
+  };
+
+  const handleAmountEnter = () => {
+    handleKeypadSubmitRef.current = handleAmountEnter;
+    if (/[+×÷*/-]/.test(rawAmount)) {
+      setRawAmount(safeEvaluateMath(rawAmount));
+    }
+    setIsKeypadOpen(false);
+  };
+
+  const handleSaveFromKeypad = () => {
+    if (/[+×÷*/-]/.test(rawAmount)) {
       setRawAmount(safeEvaluateMath(rawAmount));
     }
     setIsKeypadOpen(false);
@@ -599,7 +628,7 @@ export default function AddTransactionModal() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-6 py-3 space-y-5 pb-4">
+            <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-3 space-y-5 pb-4">
               {/* Wallet Row */}
               <div className="flex items-center justify-between py-2 border-b border-white/6">
                 <div className="flex items-center gap-3">
@@ -619,7 +648,9 @@ export default function AddTransactionModal() {
                   {isWalletDropdownOpen && (
                     <div className="absolute right-0 top-[calc(100%+8px)] z-[85] w-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-fade-in">
                       <div className="max-h-64 overflow-y-auto">
-                        {wallets.map((w) => {
+                        {creatableWallets.length === 0 ? (
+                          <p className="p-4 text-xs text-slate-400 text-center">No wallets available with create permission</p>
+                        ) : creatableWallets.map((w) => {
                           const isActive = walletId === w._id;
                           const meta = CURRENCY_INFO[w.currency as SupportedCurrency];
                           return (
@@ -1019,12 +1050,12 @@ export default function AddTransactionModal() {
 
 
                   <input type="text" placeholder="Tags (comma separated, e.g. dinner, friends, weekend)" value={tags}
-                    onFocus={() => setIsKeypadOpen(false)} onChange={(e) => setTags(e.target.value)}
+                    onFocus={() => setIsKeypadOpen(false)} enterKeyHint="done" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }} onChange={(e) => setTags(e.target.value)}
                     className="w-full bg-[#1a1c22] border border-white/8 rounded-2xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-[var(--color-primary)]/40" />
                   {activeTab === "DEBT" && (
                     <div className="space-y-2 p-3 rounded-2xl bg-amber-500/5 border border-amber-500/20">
                       <input type="text" placeholder="Party involved (Lender or Borrower name)" value={debtParty}
-                        onFocus={() => setIsKeypadOpen(false)} onChange={(e) => setDebtParty(e.target.value)}
+                        onFocus={() => setIsKeypadOpen(false)} enterKeyHint="done" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }} onChange={(e) => setDebtParty(e.target.value)}
                         className="w-full bg-[#1a1c22] border border-white/8 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none" />
                       <div className="flex gap-2">
                         <div className="flex-1">
@@ -1039,7 +1070,7 @@ export default function AddTransactionModal() {
                         </div>
                         <div className="flex-1">
                           <label className="text-[10px] text-slate-400 block mb-1">Interest %</label>
-                          <input type="number" placeholder="0" value={debtInterestRate} onFocus={() => setIsKeypadOpen(false)} onChange={(e) => setDebtInterestRate(e.target.value)}
+                          <input type="number" placeholder="0" value={debtInterestRate} onFocus={() => setIsKeypadOpen(false)} enterKeyHint="done" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }} onChange={(e) => setDebtInterestRate(e.target.value)}
                             className="w-full bg-[#1a1c22] border border-white/8 rounded-xl px-2 py-1.5 text-xs text-white outline-none" />
                         </div>
                       </div>
@@ -1053,8 +1084,50 @@ export default function AddTransactionModal() {
               )}
             </div>
 
-            {/* Sticky Save Footer — always at bottom of transaction card */}
-            <div className="px-6 py-4 border-t border-white/8 bg-[#131418] flex items-center gap-3">
+            {/* Floating Save Footer — pops out above keyboard when editing description */}
+            <AnimatePresence>
+              {isDescFocused && !isScrolledDown && (
+                <motion.div
+                  key="floating-save-bar"
+                  initial={{ opacity: 0, y: 25, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                  transition={{ type: "spring", damping: 26, stiffness: 360 }}
+                  style={{
+                    bottom: keyboardHeight > 0 ? `${keyboardHeight + 12}px` : "16px",
+                  }}
+                  className="fixed left-4 right-4 max-w-lg mx-auto z-[75] bg-[#1a1c24]/95 backdrop-blur-xl border border-white/12 shadow-[0_16px_40px_rgba(0,0,0,0.65)] rounded-2xl p-2.5 flex items-center gap-2.5"
+                >
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleSubmit}
+                    disabled={saving}
+                    className="flex-1 py-3 px-4 rounded-xl bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                    style={{ boxShadow: "0 4px 14px var(--color-primary-glow)" }}
+                  >
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    <span>{saving ? "Saving..." : "Save"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-11 h-11 rounded-xl bg-white/10 hover:bg-white/15 active:bg-white/5 text-white flex items-center justify-center transition-all flex-shrink-0 cursor-pointer border border-white/6"
+                    title="Attach photo / receipt"
+                  >
+                    <ImageIcon className="w-5 h-5 stroke-[2]" />
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Sticky Save Footer — always at bottom of transaction card, sticks back when scrolled */}
+            <div
+              className={`px-6 py-4 border-t border-white/8 bg-[#131418] flex items-center gap-3 transition-opacity duration-200 ${
+                isDescFocused && !isScrolledDown ? "opacity-0 pointer-events-none" : "opacity-100"
+              }`}
+            >
               <button type="button" onClick={handleSubmit} disabled={saving}
                 className="flex-1 py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#1f2026] text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 text-center cursor-pointer">
                 {saving ? "Saving..." : "Save"}
@@ -1102,10 +1175,10 @@ export default function AddTransactionModal() {
                       </span>
                     </div>
                   )}
-                  <CustomKeypad value={rawAmount} onChange={(val) => setRawAmount(val)} onSubmit={handleKeypadSubmit} showQuickChips={true} />
+                  <CustomKeypad value={rawAmount} onChange={(val) => setRawAmount(val)} onSubmit={handleAmountEnter} showQuickChips={true} />
                   {/* Save & image buttons inside keypad panel */}
                   <div className="flex items-center gap-3 px-2 pt-3 pb-5 border-t border-white/8 mt-2">
-                    <button type="button" onClick={handleKeypadSubmit} disabled={saving}
+                    <button type="button" onClick={handleSaveFromKeypad} disabled={saving}
                       className="flex-1 py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#1f2026] text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 text-center cursor-pointer">
                       {saving ? "Saving..." : "Save"}
                     </button>

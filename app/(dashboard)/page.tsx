@@ -1,3 +1,4 @@
+﻿import type { BudgetPeriodType } from "@/lib/budgetUtils";
 import mongoose from "mongoose";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
@@ -13,6 +14,7 @@ import {
   isTransactionMatchingBudget,
 } from "@/lib/budgetServer";
 import HomeDashboard from "@/components/admin/HomeDashboard";
+import { normalizePermissions } from "@/lib/walletPermissions";
 
 export default async function AdminHomePage() {
   const session = await auth();
@@ -38,8 +40,8 @@ export default async function AdminHomePage() {
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const globalCurrency = user.baseCurrency || "IDR";
 
-  // Auto-renew repeating budgets whose periods have ended
-  await processRepeatingBudgets(userObjectId);
+  // Fire-and-forget: auto-renew repeating budgets in background (non-blocking)
+  processRepeatingBudgets(userObjectId).catch(() => {});
 
   // Date ranges
   const now = new Date();
@@ -50,26 +52,38 @@ export default async function AdminHomePage() {
   const startOfThisMonth = new Date(currentYear, currentMonth, 1);
   const startOfNextMonth = new Date(currentYear, currentMonth + 1, 1);
 
-  // Window for budget expenses accounting for timezone offset differences
-  const budgetWindowStart = new Date(startOfThisMonth);
-  budgetWindowStart.setDate(budgetWindowStart.getDate() - 2);
-  const budgetWindowEnd = new Date(startOfNextMonth);
-  budgetWindowEnd.setDate(budgetWindowEnd.getDate() + 2);
-
   // Previous month dates
   const prevMonthDate = new Date(currentYear, currentMonth - 1, 1);
   const startOfPrevMonth = new Date(prevMonthDate.getFullYear(), prevMonthDate.getMonth(), 1);
   const endOfPrevMonth = new Date(prevMonthDate.getFullYear(), prevMonthDate.getMonth() + 1, 1);
 
-  // Fetch exchange rates
-  const rates = await getExchangeRates("USD");
+  // Fetch exchange rates and running budgets in parallel (saves one round-trip)
+  const [rates, budgets] = await Promise.all([
+    getExchangeRates("USD"),
+    Budget.find(getRunningBudgetsQuery(userObjectId, now))
+      .populate({ path: "walletId", select: "name icon currency", strictPopulate: false })
+      .sort({ order: 1, createdAt: -1 })
+      .lean(),
+  ]);
+
+  let budgetWindowStart = new Date(startOfThisMonth);
+  let budgetWindowEnd = new Date(startOfNextMonth);
+  for (const b of budgets) {
+    if (b.startDate && new Date(b.startDate) < budgetWindowStart) {
+      budgetWindowStart = new Date(b.startDate);
+    }
+    if (b.endDate && new Date(b.endDate) > budgetWindowEnd) {
+      budgetWindowEnd = new Date(b.endDate);
+    }
+  }
+  budgetWindowStart = new Date(budgetWindowStart.getTime() - 2 * 24 * 60 * 60 * 1000);
+  budgetWindowEnd = new Date(budgetWindowEnd.getTime() + 2 * 24 * 60 * 60 * 1000);
 
   const [
     wallets,
     recentTransactions,
     currentMonthTransactions,
     previousMonthTransactions,
-    budgets,
     budgetExpenses,
   ] = await Promise.all([
     Wallet.find({
@@ -90,10 +104,6 @@ export default async function AdminHomePage() {
       userId: userObjectId,
       date: { $gte: startOfPrevMonth, $lt: endOfPrevMonth },
     }).lean(),
-    Budget.find(getRunningBudgetsQuery(userObjectId, now))
-      .populate({ path: "walletId", select: "name icon currency", strictPopulate: false })
-      .sort({ order: 1, createdAt: -1 })
-      .lean(),
     Transaction.find({
       userId: userObjectId,
       type: "EXPENSE",
@@ -104,18 +114,19 @@ export default async function AdminHomePage() {
   // Attach owner info (email + name) to each wallet
   const ownerIds = [...new Set(wallets.map((w) => String(w.userId)))];
   const owners = (await User.find({ _id: { $in: ownerIds } })
-    .select("_id email name")
+    .select("_id email name image profileColor")
     .lean()) as Array<{ _id: unknown; email: string; name: string }>;
-  const ownerMap = new Map(owners.map((o) => [String(o._id), { email: o.email, name: o.name }]));
+  const ownerMap = new Map((owners as Array<{ _id: unknown; email: string; name: string; image?: string; profileColor?: string }>).map((o) => [String(o._id), { email: o.email, name: o.name, image: o.image || "", profileColor: o.profileColor || "" }]));
 
   // Also collect all member emails to populate member names
   const allMemberEmails = [
     ...new Set(wallets.flatMap((w) => (w.sharedWith || []).map((m) => m.email.toLowerCase()))),
   ];
   const memberUsers = (await User.find({ email: { $in: allMemberEmails } })
-    .select("email name")
+    .select("email name image profileColor")
     .lean()) as Array<{ email: string; name: string }>;
   const memberNameMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u.name]));
+  const memberUserMap = new Map((memberUsers as Array<{ email: string; name: string; image?: string; profileColor?: string }>).map((u) => [u.email.toLowerCase(), u]));
 
   // Resolve per-user defaultWalletId and custom walletOrder
   const userDoc = (await User.findById(userId).select("defaultWalletId walletOrder").lean()) as {
@@ -256,6 +267,9 @@ export default async function AdminHomePage() {
       order: (b as { order?: number }).order ?? 0,
       amountLimit: b.amountLimit,
       currency: budgetCurrency,
+      periodType: (b.periodType as BudgetPeriodType) || "MONTH",
+      startDate: bStart.toISOString(),
+      endDate: bEnd.toISOString(),
       spent,
       percentUsed,
     };
@@ -298,11 +312,17 @@ export default async function AdminHomePage() {
           email: m.email,
           name: m.name || memberNameMap.get(m.email.toLowerCase()) || "",
           role: m.role,
+          roleName: (m as any).roleName || (m.role === "VIEWER" ? "Viewer" : "Editor"),
+          permissions: normalizePermissions((m as any).permissions, m.role),
+          image: memberUserMap.get(m.email.toLowerCase())?.image || (m as any).image || "",
+          profileColor: memberUserMap.get(m.email.toLowerCase())?.profileColor || (m as any).profileColor || "",
           status: m.status,
         })),
         userId: String(w.userId),
         ownerEmail: ownerMap.get(String(w.userId))?.email ?? "",
         ownerName: ownerMap.get(String(w.userId))?.name ?? "",
+        ownerImage: ownerMap.get(String(w.userId))?.image ?? "",
+        ownerProfileColor: ownerMap.get(String(w.userId))?.profileColor ?? "",
       }))}
       recentTransactions={visibleRecentTransactions.map((tx) => ({
         _id: String((tx as { _id: unknown })._id),

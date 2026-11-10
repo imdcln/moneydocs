@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import BottomNav from "@/components/admin/BottomNav";
@@ -7,22 +6,6 @@ import { AdminModalProvider } from "@/hooks/useAdminModal";
 import { ToastProvider } from "@/components/ui/Toast";
 import { WalletProvider } from "@/hooks/useWalletContext";
 import SessionDeviceWatcher from "@/components/admin/SessionDeviceWatcher";
-
-export const metadata: Metadata = {
-  title: {
-    default: "Money Docs",
-    template: "%s | Money Docs",
-  },
-  description: "Money Docs — Personal finance & debt dashboard",
-  icons: {
-    icon: [
-      { url: "/assets/icons/favicon2.png" },
-      { url: "/assets/favicon2.png" },
-    ],
-    shortcut: "/assets/icons/favicon2.png",
-    apple: "/assets/icons/favicon2.png",
-  },
-};
 
 export default async function DashboardLayout({
   children,

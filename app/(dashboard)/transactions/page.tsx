@@ -22,6 +22,7 @@ import {
   Square,
   ChevronRight,
   AlertTriangle,
+  Lock,
 } from "lucide-react";
 import {
   formatMoney,
@@ -49,6 +50,40 @@ import { useWalletContext } from "@/hooks/useWalletContext";
 import { useToast } from "@/components/ui/Toast";
 import CurrencyFlag from "@/components/admin/CurrencyFlag";
 import PageLoading from "@/components/ui/PageLoading";
+import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from "@/lib/clientCache";
+import OnboardingSpotlight, { SpotlightStep } from "@/components/transactions/OnboardingSpotlight";
+import ConfettiEffect from "@/components/transactions/ConfettiEffect";
+
+const ONBOARDING_STEPS: SpotlightStep[] = [
+  {
+    targetId: "spotlight-balance-section",
+    title: "Wallet Balance & Currency",
+    description:
+      "💎 Monitor your total aggregated balance across all wallets. Tap the currency pill to instantly switch view currencies with real-time conversion rates.",
+    preferredPlacement: "bottom",
+  },
+  {
+    targetId: "spotlight-period-tabs",
+    title: "Timeline Navigation",
+    description:
+      "⚡ Navigate across months, quarters, or weeks. Track past financial health or inspect future planned expenses with the scrollable period selector.",
+    preferredPlacement: "bottom",
+  },
+  {
+    targetId: "spotlight-cashflow-card",
+    title: "Cashflow & Financial Reports",
+    description:
+      "📊 Track net savings with live Inflow vs. Outflow metrics. Tap 'View report for this period' to open detailed visual analytics and category breakdowns.",
+    preferredPlacement: "top",
+  },
+  {
+    targetId: "spotlight-transactions-list",
+    title: "Activity Feed & Actions",
+    description:
+      "🎯 Your transactions are categorized automatically. Issue warnings highlight items needing attention. Use the ⋯ menu to transfer funds or bulk-manage entries.",
+    preferredPlacement: "top",
+  },
+];
 
 interface Wallet {
   _id: string;
@@ -334,13 +369,27 @@ export default function TransactionsPage() {
     selectedWalletId,
     setSelectedWalletId,
     refreshWallets,
+    activeWalletPermissions,
+    getPermissionsForWallet,
   } = useWalletContext();
 
   const [timeRangeUnit, setTimeRangeUnit] = useState<TimeRangeUnit>("MONTH");
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("offset_0");
   const [viewMode, setViewMode] = useState<ViewMode>("BY_DAY");
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<Transaction[]>("moneydocs_transactions");
+      if (cached && Array.isArray(cached) && cached.length > 0) return cached;
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<Transaction[]>("moneydocs_transactions");
+      if (cached && Array.isArray(cached) && cached.length > 0) return false;
+    }
+    return true;
+  });
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [userCurrency, setUserCurrency] = useState("IDR");
@@ -357,6 +406,16 @@ export default function TransactionsPage() {
   // UI state
   const [walletDropdownOpen, setWalletDropdownOpen] = useState(false);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
+  const canEditBalance =
+    selectedWalletId === "ALL"
+      ? (wallets as any[]).some((w) => getPermissionsForWallet(w._id).editBalance)
+      : activeWalletPermissions.editBalance;
+
+  const canDeleteTransactions =
+    selectedWalletId === "ALL"
+      ? (wallets as any[]).some((w) => getPermissionsForWallet(w._id).transactions.delete)
+      : activeWalletPermissions.transactions.delete;
+
   const [timeRangeDropdownOpen, setTimeRangeDropdownOpen] = useState(false);
   const [isBulkDeleteMode, setIsBulkDeleteMode] = useState(false);
   const [selectedTxIds, setSelectedTxIds] = useState<string[]>([]);
@@ -370,6 +429,40 @@ export default function TransactionsPage() {
   const [currencyDropdownOpen, setCurrencyDropdownOpen] = useState(false);
   const currencyDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Onboarding Spotlight Tour state
+  const [tourOpen, setTourOpen] = useState(false);
+  const [currentTourStep, setCurrentTourStep] = useState(0);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [showCelebrationToast, setShowCelebrationToast] = useState(false);
+
+  const handleStartTour = () => {
+    setCurrentTourStep(0);
+    setTourOpen(true);
+  };
+
+  const handleNextTourStep = () => {
+    if (currentTourStep < ONBOARDING_STEPS.length - 1) {
+      setCurrentTourStep((s) => s + 1);
+    } else {
+      handleCompleteTour();
+    }
+  };
+
+  const handlePrevTourStep = () => {
+    if (currentTourStep > 0) {
+      setCurrentTourStep((s) => s - 1);
+    }
+  };
+
+  const handleCompleteTour = () => {
+    setTourOpen(false);
+    setShowCelebration(true);
+    setShowCelebrationToast(true);
+    setTimeout(() => {
+      setShowCelebrationToast(false);
+    }, 4200);
+  };
+
   // Modals
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -381,11 +474,15 @@ export default function TransactionsPage() {
   const fetchWallets = refreshWallets;
 
   const fetchTransactions = async () => {
-    setLoading(true);
+    if (transactions.length === 0) {
+      setLoading(true);
+    }
     try {
       const res = await fetch("/api/finance/transactions?limit=1000");
       const data = await res.json();
-      setTransactions(data.transactions ?? []);
+      const txList = data.transactions ?? [];
+      setTransactions(txList);
+      setCache("moneydocs_transactions", txList, 30_000);
     } finally {
       setLoading(false);
     }
@@ -395,17 +492,34 @@ export default function TransactionsPage() {
     fetchWallets();
     fetchTransactions();
 
-    fetch("/api/finance/user")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.user?.baseCurrency) setUserCurrency(d.user.baseCurrency);
-      });
+    // Use sessionStorage cache to avoid redundant fetches on page revisit
+    const cachedUser = getCache<{ baseCurrency: string }>(CACHE_KEYS.USER);
+    if (cachedUser?.baseCurrency) {
+      setUserCurrency(cachedUser.baseCurrency);
+    } else {
+      fetch("/api/finance/user")
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.user?.baseCurrency) {
+            setUserCurrency(d.user.baseCurrency);
+            setCache(CACHE_KEYS.USER, d.user, CACHE_TTL.USER);
+          }
+        });
+    }
 
-    fetch("/api/finance/exchange-rates")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.rates) setRates(d.rates);
-      });
+    const cachedRates = getCache<Record<string, number>>(CACHE_KEYS.EXCHANGE_RATES);
+    if (cachedRates) {
+      setRates(cachedRates);
+    } else {
+      fetch("/api/finance/exchange-rates")
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.rates) {
+            setRates(d.rates);
+            setCache(CACHE_KEYS.EXCHANGE_RATES, d.rates, CACHE_TTL.EXCHANGE_RATES);
+          }
+        });
+    }
 
     const onAdded = () => {
       fetchTransactions();
@@ -774,7 +888,7 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Top Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {isBulkDeleteMode ? (
         <div className="flex items-center justify-between py-1 bg-[#1a1c24] px-3 rounded-2xl border border-white/10 animate-fade-in">
           <button
@@ -798,12 +912,19 @@ export default function TransactionsPage() {
         </div>
       ) : (
         <div className="flex items-center justify-between py-1">
-          <Link
-            href="/"
-            className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
+          <button
+            type="button"
+            onClick={handleStartTour}
+            className="relative w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer group"
+            title="Interactive Tour & Guide"
+            aria-label="Start Onboarding Spotlight Tour"
           >
-            <HelpCircle className="w-5 h-5" />
-          </Link>
+            <HelpCircle className="w-5 h-5 transition-transform duration-200 group-hover:scale-110" />
+            <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 pointer-events-none">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-primary-light,#34d399)] opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[var(--color-primary,#10b981)]" />
+            </span>
+          </button>
 
           {/* Wallet Switcher Pill with Global internet icon */}
           <WalletSwitcher />
@@ -881,29 +1002,33 @@ export default function TransactionsPage() {
                     </button>
 
                     {/* 3. Adjust Balance */}
-                    <button
-                      onClick={() => {
-                        setOptionsMenuOpen(false);
-                        const targetId = selectedWalletId !== "ALL" ? selectedWalletId : wallets[0]?._id;
-                        router.push(`/transactions/adjust-balance${targetId ? `?walletId=${targetId}` : ""}`);
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/5 transition-colors text-left"
-                    >
-                      <Sliders className="w-4 h-4 text-slate-400" />
-                      <span>Adjust Balance</span>
-                    </button>
+                    {canEditBalance && (
+                      <button
+                        onClick={() => {
+                          setOptionsMenuOpen(false);
+                          const targetId = selectedWalletId !== "ALL" ? selectedWalletId : wallets[0]?._id;
+                          router.push(`/transactions/adjust-balance${targetId ? `?walletId=${targetId}` : ""}`);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/5 transition-colors text-left"
+                      >
+                        <Sliders className="w-4 h-4 text-slate-400" />
+                        <span>Adjust Balance</span>
+                      </button>
+                    )}
 
                     {/* 4. Delete transactions */}
-                    <button
-                      onClick={() => {
-                        setIsBulkDeleteMode(true);
-                        setOptionsMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-red-500/10 text-red-400 transition-colors text-left"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Delete transactions</span>
-                    </button>
+                    {canDeleteTransactions && (
+                      <button
+                        onClick={() => {
+                          setIsBulkDeleteMode(true);
+                          setOptionsMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-red-500/10 text-red-400 transition-colors text-left"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete transactions</span>
+                      </button>
+                    )}
                   </div>
 
                   <div className="py-1">
@@ -981,7 +1106,7 @@ export default function TransactionsPage() {
       )}
 
       {/* Balance Summary */}
-      <div className="text-center pt-1 pb-2">
+      <div id="spotlight-balance-section" className="text-center pt-1 pb-2">
         <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">Balance</p>
         <h1 className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
           {formatMoney(totalBalance, viewCurrency)}
@@ -1043,7 +1168,7 @@ export default function TransactionsPage() {
       </div>
 
       {/* Horizontally scrollable period tabs */}
-      <div className="flex items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-b border-white/8 text-xs font-bold tracking-wider px-2 scroll-smooth">
+      <div id="spotlight-period-tabs" className="flex items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-b border-white/8 text-xs font-bold tracking-wider px-2 scroll-smooth">
         {periodTabs.map((tab) => {
           const isActive = selectedPeriodId === tab.id;
           return (
@@ -1065,7 +1190,7 @@ export default function TransactionsPage() {
       </div>
 
       {/* Inflow / Outflow Summary Card */}
-      <div className="money-card p-4 bg-[#141519] border border-white/8 rounded-2xl space-y-2">
+      <div id="spotlight-cashflow-card" className="money-card p-4 bg-[#141519] border border-white/8 rounded-2xl space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-slate-400">Inflow</span>
           <span className="text-sky-400 font-bold">{formatMoney(inflow, viewCurrency)}</span>
@@ -1171,8 +1296,18 @@ export default function TransactionsPage() {
       )}
 
       {/* Transactions List */}
-      <div className="space-y-4 pt-1">
-        {loading ? (
+      <div id="spotlight-transactions-list" className="space-y-4 pt-1">
+        {selectedWalletId !== "ALL" && !activeWalletPermissions.transactions.read ? (
+          <div className="text-center py-16 px-4 bg-[#141519] border border-white/8 rounded-3xl max-w-sm mx-auto animate-fade-in">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto mb-3 shadow-lg shadow-amber-500/5">
+              <Lock className="w-7 h-7" />
+            </div>
+            <p className="text-white text-base font-bold mb-1">Access Restricted</p>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              You do not have permission to view transactions for this wallet.
+            </p>
+          </div>
+        ) : loading ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-20 rounded-2xl bg-white/5 animate-pulse" />
@@ -1631,6 +1766,43 @@ export default function TransactionsPage() {
           </div>
         </div>
       )}
+
+      {/* Celebratory Confetti & Toast */}
+      {showCelebration && (
+        <ConfettiEffect
+          duration={3800}
+          particleCount={140}
+          onComplete={() => setShowCelebration(false)}
+        />
+      )}
+
+      {showCelebrationToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 px-5 py-3 rounded-2xl bg-[#1a1c24]/95 border border-[var(--color-primary-border)] text-[var(--color-primary-light)] shadow-2xl backdrop-blur-xl animate-fade-in">
+          <div className="w-8 h-8 rounded-full bg-[var(--color-primary-subtle)] flex items-center justify-center text-base">
+            🎉
+          </div>
+          <div>
+            <p className="text-xs font-bold text-white tracking-wide">
+              You're all set! Onboarding Complete
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Tap the <span className="text-[var(--color-primary-light)] font-semibold">?</span> icon anytime if you need a walkthrough.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Onboarding Spotlight Tour */}
+      <OnboardingSpotlight
+        isOpen={tourOpen}
+        steps={ONBOARDING_STEPS}
+        currentStep={currentTourStep}
+        onNext={handleNextTourStep}
+        onPrev={handlePrevTourStep}
+        onClose={() => setTourOpen(false)}
+        onComplete={handleCompleteTour}
+        padding={10}
+      />
     </div>
   );
 }

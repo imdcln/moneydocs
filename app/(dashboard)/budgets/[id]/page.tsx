@@ -8,6 +8,7 @@ import {
   Trash2,
   SquarePen,
   AlertTriangle,
+  Lock,
   Wallet as WalletIcon,
 } from "lucide-react";
 import {
@@ -76,7 +77,7 @@ export default function BudgetDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { wallets } = useWalletContext();
+  const { wallets, getPermissionsForWallet } = useWalletContext();
   const { toast } = useToast();
 
   const [budget, setBudget] = useState<BudgetDetailData | null>(null);
@@ -84,6 +85,15 @@ export default function BudgetDetailPage({
   const [userCurrency, setUserCurrency] = useState("IDR");
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const budgetWalletId =
+    typeof budget?.walletId === "object"
+      ? (budget.walletId as { _id?: string })?._id
+      : budget?.walletId;
+  const budgetPerms = getPermissionsForWallet(budgetWalletId);
+  const canReadBudget = !budgetWalletId || budgetPerms.budgets.read;
+  const canUpdateBudget = !budgetWalletId || budgetPerms.budgets.update;
+  const canDeleteBudget = !budgetWalletId || budgetPerms.budgets.delete;
+
 
   const paramMonthYear = searchParams.get("monthYear");
   const paramWalletId = searchParams.get("walletId");
@@ -334,7 +344,7 @@ export default function BudgetDetailPage({
         <h1 className="text-white font-bold text-lg tracking-tight">Budget details</h1>
 
         <div className="flex items-center gap-1">
-          {!budget.isOtherCategories && (
+          {!budget.isOtherCategories && canUpdateBudget && (
             <button
               type="button"
               onClick={() => setShowEditModal(true)}
@@ -344,7 +354,7 @@ export default function BudgetDetailPage({
               <SquarePen className="w-5 h-5" />
             </button>
           )}
-          {!budget.isOtherCategories && (
+          {!budget.isOtherCategories && canDeleteBudget && (
             <button
               type="button"
               onClick={() => setShowDeleteConfirm(true)}

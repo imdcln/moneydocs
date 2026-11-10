@@ -93,7 +93,7 @@ export default function HelpPage() {
 
         {/* Item 2: Developer page */}
         <a
-          href="/"
+          href="https://dclnedocs.vercel.app"
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center justify-between p-4 hover:bg-white/3 transition-colors cursor-pointer group"
@@ -112,7 +112,7 @@ export default function HelpPage() {
                 </span>
               </div>
               <p className="text-slate-400 text-xs mt-0.5">
-                Visit developer homepage &amp; showcase (dclnedocs)
+                Visit developer's personal information
               </p>
             </div>
           </div>

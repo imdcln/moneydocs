@@ -20,7 +20,7 @@ import {
   Minus,
 } from "lucide-react";
 import { formatMoney } from "@/lib/currency";
-import { getCategoryDisplayName } from "@/lib/categories";
+import { getCategoryDisplayName, resolveCategoryHierarchy, calculateTrendComparison } from "@/lib/categories";
 import CategoryIcon from "@/components/ui/CategoryIcon";
 
 interface Transaction {
@@ -46,6 +46,25 @@ interface MonthlySpendingReportChartProps {
 type ReportMode = "trending" | "spending";
 
 // ─── Spending Report sub-view ───────────────────────────────────────────────
+interface SubCategorySpendItem {
+  subId: string;
+  subName: string;
+  cur: number;
+  prev: number;
+  isDirectParent?: boolean;
+}
+
+interface ParentCategorySpendItem {
+  parentId: string;
+  parentName: string;
+  cur: number;
+  prev: number;
+  directCur: number;
+  directPrev: number;
+  hasChildTransactions: boolean;
+  subCategories: SubCategorySpendItem[];
+}
+
 function SpendingReportView({
   currentTransactions,
   previousTransactions,
@@ -65,42 +84,110 @@ function SpendingReportView({
     tx.convertedToGlobal ?? tx.convertedAmountIDR ?? tx.amount ?? 0;
 
   const { categoryData, topCategory } = useMemo(() => {
-    const acc: Record<
+    const parentMap: Record<
       string,
-      { cur: number; prev: number; cat: string; sub?: string }
+      {
+        parentId: string;
+        parentName: string;
+        directCur: number;
+        directPrev: number;
+        subs: Record<string, { subId: string; subName: string; cur: number; prev: number }>;
+      }
     > = {};
+
+    const ensureParent = (pId: string, pName: string) => {
+      if (!parentMap[pId]) {
+        parentMap[pId] = {
+          parentId: pId,
+          parentName: pName,
+          directCur: 0,
+          directPrev: 0,
+          subs: {},
+        };
+      }
+      return parentMap[pId];
+    };
 
     currentTransactions.forEach((tx) => {
       if (tx.type !== "EXPENSE") return;
-      const key = tx.subCategory
-        ? `${tx.category}:${tx.subCategory}`
-        : tx.category ?? "other";
-      if (!acc[key])
-        acc[key] = { cur: 0, prev: 0, cat: tx.category ?? "other", sub: tx.subCategory };
-      acc[key].cur += getAmt(tx);
+      const { parentId, parentName, subId, subName } = resolveCategoryHierarchy(tx.category, tx.subCategory);
+      const parent = ensureParent(parentId, parentName);
+      const amt = getAmt(tx);
+      if (subId) {
+        if (!parent.subs[subId]) {
+          parent.subs[subId] = { subId, subName: subName || subId, cur: 0, prev: 0 };
+        }
+        parent.subs[subId].cur += amt;
+      } else {
+        parent.directCur += amt;
+      }
     });
 
     previousTransactions.forEach((tx) => {
       if (tx.type !== "EXPENSE") return;
-      const key = tx.subCategory
-        ? `${tx.category}:${tx.subCategory}`
-        : tx.category ?? "other";
-      if (!acc[key])
-        acc[key] = { cur: 0, prev: 0, cat: tx.category ?? "other", sub: tx.subCategory };
-      acc[key].prev += getAmt(tx);
+      const { parentId, parentName, subId, subName } = resolveCategoryHierarchy(tx.category, tx.subCategory);
+      const parent = ensureParent(parentId, parentName);
+      const amt = getAmt(tx);
+      if (subId) {
+        if (!parent.subs[subId]) {
+          parent.subs[subId] = { subId, subName: subName || subId, cur: 0, prev: 0 };
+        }
+        parent.subs[subId].prev += amt;
+      } else {
+        parent.directPrev += amt;
+      }
     });
 
-    const sorted = Object.entries(acc)
-      .map(([key, v]) => ({
-        key,
-        ...v,
-        cur: Math.round(v.cur),
-        prev: Math.round(v.prev),
-      }))
-      .sort((a, b) => b.cur - a.cur)
-      .slice(0, 6);
+    const parsedCategories: ParentCategorySpendItem[] = Object.values(parentMap)
+      .map((p) => {
+        const rawSubs = Object.values(p.subs);
+        // Only active subcategories that had spending in either current or previous month
+        const activeSubs = rawSubs.filter((s) => s.cur > 0 || s.prev > 0);
+        const hasChildTransactions = activeSubs.length > 0;
 
-    return { categoryData: sorted, topCategory: sorted[0] ?? null };
+        const subCategories: SubCategorySpendItem[] = activeSubs.map((s) => ({
+          subId: s.subId,
+          subName: s.subName,
+          cur: Math.round(s.cur),
+          prev: Math.round(s.prev),
+        }));
+
+        // If parent category has direct spending AND child categories done transactions,
+        // include direct spending as a sub-category so the breakdown transparently accounts for parent total
+        if (hasChildTransactions && (p.directCur > 0 || p.directPrev > 0)) {
+          subCategories.unshift({
+            subId: "_direct",
+            subName: `${p.parentName} (General)`,
+            cur: Math.round(p.directCur),
+            prev: Math.round(p.directPrev),
+            isDirectParent: true,
+          });
+        }
+
+        // Sum up direct + all child categories
+        const cur = Math.round(p.directCur + activeSubs.reduce((s, c) => s + c.cur, 0));
+        const prev = Math.round(p.directPrev + activeSubs.reduce((s, c) => s + c.prev, 0));
+
+        // Sort subcategories by cur descending, then prev descending
+        subCategories.sort((a, b) => b.cur - a.cur || b.prev - a.prev);
+
+        return {
+          parentId: p.parentId,
+          parentName: p.parentName,
+          cur,
+          prev,
+          directCur: Math.round(p.directCur),
+          directPrev: Math.round(p.directPrev),
+          hasChildTransactions,
+          subCategories,
+        };
+      })
+      .filter((p) => p.cur > 0 || p.prev > 0)
+      .sort((a, b) => b.cur - a.cur || b.prev - a.prev);
+
+    const topCategory = parsedCategories.find((c) => c.cur > 0) ?? null;
+
+    return { categoryData: parsedCategories, topCategory };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTransactions, previousTransactions]);
 
@@ -140,7 +227,7 @@ function SpendingReportView({
               Top spend
             </p>
             <p className="text-white font-bold text-sm mt-0.5 truncate">
-              {getCategoryDisplayName(topCategory.cat, topCategory.sub)}
+              {topCategory.parentName}
             </p>
           </div>
         )}
@@ -148,7 +235,7 @@ function SpendingReportView({
 
       {/* Per-category bars */}
       {categoryData.length > 0 ? (
-        <div className="space-y-2.5">
+        <div className="space-y-3">
           <p className="text-slate-500 text-[10px] uppercase tracking-wider px-0.5">
             Category breakdown · {monthLabel}
           </p>
@@ -156,83 +243,154 @@ function SpendingReportView({
           {categoryData.map((item) => {
             const pctCur = (item.cur / maxBar) * 100;
             const pctPrev = (item.prev / maxBar) * 100;
-            const delta =
-              item.prev > 0
-                ? ((item.cur - item.prev) / item.prev) * 100
-                : null;
-            const trending =
-              delta === null
-                ? null
-                : delta > 5
-                ? "up"
-                : delta < -5
-                ? "down"
-                : "flat";
+            const parentTrend = calculateTrendComparison(item.cur, item.prev);
 
             return (
               <div
-                key={item.key}
-                className="rounded-2xl bg-[#1b1d24] border border-white/5 p-3 space-y-2"
+                key={item.parentId}
+                className="rounded-2xl bg-[#1b1d24] border border-white/5 p-3.5 space-y-2.5"
               >
-                {/* Row: icon + name + amount + trend icon */}
+                {/* Parent Row: icon + name + amount + trend icon */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <CategoryIcon
-                      categoryId={item.cat}
-                      subCategoryId={item.sub}
+                      categoryId={item.parentId}
                       size="sm"
                     />
-                    <span className="text-white text-xs font-semibold truncate max-w-[130px]">
-                      {getCategoryDisplayName(item.cat, item.sub)}
+                    <span className="text-white text-xs font-bold truncate">
+                      {item.parentName}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-red-400 font-bold text-xs">
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-red-400 font-extrabold text-xs">
                       {formatMoney(item.cur, globalCurrency)}
                     </span>
-                    {trending === "up" && (
+                    {parentTrend.trending === "up" && (
                       <TrendingUp className="w-3 h-3 text-red-400" />
                     )}
-                    {trending === "down" && (
+                    {parentTrend.trending === "down" && (
                       <TrendingDown className="w-3 h-3 text-emerald-400" />
                     )}
-                    {trending === "flat" && (
+                    {parentTrend.trending === "flat" && (
                       <Minus className="w-3 h-3 text-slate-500" />
                     )}
                   </div>
                 </div>
 
-                {/* Current month bar */}
+                {/* Parent Bars: Current month bar & Previous month bar */}
                 <div className="space-y-1">
                   <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
                     <div
                       className="h-full rounded-full bg-red-500 transition-all duration-700"
-                      style={{ width: `${pctCur}%` }}
+                      style={{ width: `${Math.min(100, Math.max(item.cur > 0 ? 3 : 0, pctCur))}%` }}
                     />
                   </div>
-                  {/* Previous month bar (greyed) */}
-                  <div className="w-full h-1 rounded-full bg-slate-800 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-slate-600 transition-all duration-700"
-                      style={{ width: `${pctPrev}%` }}
-                    />
-                  </div>
+                  {item.prev > 0 && (
+                    <div className="w-full h-1 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-slate-600 transition-all duration-700"
+                        style={{ width: `${Math.min(100, Math.max(2, pctPrev))}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
 
-                {/* Delta label */}
-                {delta !== null && (
-                  <p
-                    className={`text-[10px] font-medium ${
-                      trending === "up"
-                        ? "text-red-400"
-                        : trending === "down"
-                        ? "text-emerald-400"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    {delta > 0 ? "▲" : delta < 0 ? "▼" : "–"}{" "}
-                    {Math.abs(Math.round(delta))}% vs prev month
-                  </p>
+                {/* Parent Delta label */}
+                <p
+                  className={`text-[10px] font-medium ${
+                    parentTrend.trending === "up"
+                      ? "text-red-400"
+                      : parentTrend.trending === "down"
+                      ? "text-emerald-400"
+                      : "text-slate-500"
+                  }`}
+                >
+                  {parentTrend.percentText}
+                </p>
+
+                {/* Sub-categories breakdown (only if child categories have transactions) */}
+                {item.hasChildTransactions && (
+                  <div className="pt-2.5 mt-2.5 border-t border-white/5 space-y-2">
+                    <div className="flex items-center justify-between text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-0.5">
+                      <span>Sub-categories</span>
+                      <span className="text-slate-500">{item.subCategories.length} sub-items</span>
+                    </div>
+
+                    <div className="space-y-2 pl-2 border-l-2 border-white/10">
+                      {item.subCategories.map((sub) => {
+                        const subTrend = calculateTrendComparison(sub.cur, sub.prev);
+                        const subPctCur = item.cur > 0 ? (sub.cur / item.cur) * 100 : 0;
+                        const subPctPrev = Math.max(item.cur, item.prev, 1) > 0
+                          ? (sub.prev / Math.max(item.cur, item.prev, 1)) * 100
+                          : 0;
+
+                        return (
+                          <div
+                            key={sub.subId}
+                            className="p-2 rounded-xl bg-white/[0.03] border border-white/5 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <CategoryIcon
+                                  categoryId={item.parentId}
+                                  subCategoryId={sub.isDirectParent ? undefined : sub.subId}
+                                  size="sm"
+                                />
+                                <span className="text-slate-200 text-xs font-medium truncate max-w-[130px]">
+                                  {sub.subName}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <span className="text-red-400 font-semibold text-xs">
+                                  {formatMoney(sub.cur, globalCurrency)}
+                                </span>
+                                {subTrend.trending === "up" && (
+                                  <TrendingUp className="w-3 h-3 text-red-400" />
+                                )}
+                                {subTrend.trending === "down" && (
+                                  <TrendingDown className="w-3 h-3 text-emerald-400" />
+                                )}
+                                {subTrend.trending === "flat" && (
+                                  <Minus className="w-3 h-3 text-slate-500" />
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Sub Bars */}
+                            <div className="space-y-1">
+                              <div className="w-full h-1 rounded-full bg-slate-800 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-red-500/80 transition-all duration-700"
+                                  style={{ width: `${Math.min(100, Math.max(sub.cur > 0 ? 3 : 0, subPctCur))}%` }}
+                                />
+                              </div>
+                              {sub.prev > 0 && (
+                                <div className="w-full h-0.5 rounded-full bg-slate-800 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-slate-600 transition-all duration-700"
+                                    style={{ width: `${Math.min(100, Math.max(2, subPctPrev))}%` }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Sub Delta Label */}
+                            <p
+                              className={`text-[9px] font-medium ${
+                                subTrend.trending === "up"
+                                  ? "text-red-400"
+                                  : subTrend.trending === "down"
+                                  ? "text-emerald-400"
+                                  : "text-slate-500"
+                              }`}
+                            >
+                              {subTrend.percentText}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
             );

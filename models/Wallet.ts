@@ -1,16 +1,21 @@
 import mongoose, { Schema, Document, Model, Types } from "mongoose";
+import { IWalletPermissions } from "@/lib/walletPermissions";
 
 export type WalletType = "CASH" | "BANK" | "E_WALLET" | "INVESTMENT" | "OTHER";
 
 export interface IWalletSharedUser {
   email: string;
   name?: string;
-  role: "VIEWER" | "EDITOR" | "ADMIN";
+  role: "VIEWER" | "EDITOR" | "ADMIN" | string;
+  roleName?: string;
+  permissions?: IWalletPermissions;
   status: "PENDING" | "ACCEPTED" | "DECLINED";
   addedAt?: Date;
   isDefault?: boolean;
   excludeFromTotal?: boolean;
   enableNotification?: boolean;
+  image?: string;
+  profileColor?: string;
 }
 
 export interface IWallet extends Document {
@@ -53,7 +58,9 @@ const WalletSchema = new Schema<IWallet>(
       {
         email: { type: String, lowercase: true, trim: true },
         name: { type: String },
-        role: { type: String, enum: ["VIEWER", "EDITOR", "ADMIN"], default: "EDITOR" },
+        role: { type: String, default: "EDITOR" },
+        roleName: { type: String, default: "Editor" },
+        permissions: { type: Schema.Types.Mixed },
         status: { type: String, enum: ["PENDING", "ACCEPTED", "DECLINED"], default: "PENDING" },
         addedAt: { type: Date, default: Date.now },
         isDefault: { type: Boolean, default: false },

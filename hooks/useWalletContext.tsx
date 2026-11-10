@@ -6,8 +6,26 @@ import {
   useState,
   useCallback,
   useEffect,
+  useMemo,
   ReactNode,
 } from "react";
+import {
+  IWalletPermissions,
+  getUserWalletPermissions,
+  DEFAULT_OWNER_PERMISSIONS,
+  DEFAULT_VIEWER_PERMISSIONS,
+} from "@/lib/walletPermissions";
+
+export interface WalletMemberSummary {
+  email: string;
+  name?: string;
+  role: string;
+  roleName?: string;
+  status?: string;
+  permissions?: IWalletPermissions;
+  image?: string;
+  profileColor?: string;
+}
 
 export interface WalletSummary {
   _id: string;
@@ -22,7 +40,14 @@ export interface WalletSummary {
   userId?: string;
   ownerEmail?: string;
   ownerName?: string;
-  sharedWith?: Array<{ email: string; role: string; status?: string }>;
+  ownerImage?: string;
+  ownerProfileColor?: string;
+  sharedWith?: WalletMemberSummary[];
+}
+
+export interface CurrentUserSummary {
+  id: string;
+  email: string;
 }
 
 interface WalletContextType {
@@ -34,6 +59,12 @@ interface WalletContextType {
   setWallets: (wallets: WalletSummary[]) => void;
   /** Force a fresh fetch from the server. */
   refreshWallets: () => void;
+  /** Logged-in user info (id & email) */
+  currentUser: CurrentUserSummary | null;
+  /** Resolved permissions for the currently-selected wallet */
+  activeWalletPermissions: IWalletPermissions;
+  /** Get permissions for any specific wallet */
+  getPermissionsForWallet: (walletId?: string) => IWalletPermissions;
 }
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -42,6 +73,8 @@ const STORAGE_KEY = "selected_wallet_id";
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallets, setWalletsState] = useState<WalletSummary[]>([]);
+  const [currentUser, setCurrentUser] = useState<CurrentUserSummary | null>(null);
+
   // "ALL" = global/aggregated view; any wallet._id = that specific wallet is active.
   const [selectedWalletId, setSelectedWalletIdState] = useState<string>(() => {
     if (typeof window !== "undefined") {
@@ -69,6 +102,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       .then((d) => {
         const list: WalletSummary[] = d.wallets ?? [];
         setWalletsState(list);
+        if (d.currentUser) {
+          setCurrentUser(d.currentUser);
+        }
 
         if (typeof window !== "undefined") {
           const saved = localStorage.getItem(STORAGE_KEY);
@@ -136,6 +172,52 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWalletsState(list);
   }, []);
 
+  const getPermissionsForWallet = useCallback(
+    (walletId?: string): IWalletPermissions => {
+      if (!walletId || walletId === "ALL") {
+        // If "ALL" is selected, user has permissions if they have them on at least one wallet
+        if (wallets.length === 0) return DEFAULT_OWNER_PERMISSIONS;
+        const canCreateAny = wallets.some(
+          (w) =>
+            getUserWalletPermissions(w, currentUser?.email, currentUser?.id)
+              .transactions.create
+        );
+        const canReadAny = wallets.some(
+          (w) =>
+            getUserWalletPermissions(w, currentUser?.email, currentUser?.id)
+              .transactions.read
+        );
+        const canBudgetAny = wallets.some(
+          (w) =>
+            getUserWalletPermissions(w, currentUser?.email, currentUser?.id)
+              .budgets.create
+        );
+        return {
+          ...DEFAULT_OWNER_PERMISSIONS,
+          transactions: {
+            ...DEFAULT_OWNER_PERMISSIONS.transactions,
+            create: canCreateAny,
+            read: canReadAny,
+          },
+          budgets: {
+            ...DEFAULT_OWNER_PERMISSIONS.budgets,
+            create: canBudgetAny,
+          },
+        };
+      }
+
+      const target = wallets.find((w) => String(w._id) === String(walletId));
+      if (!target) return DEFAULT_VIEWER_PERMISSIONS;
+
+      return getUserWalletPermissions(target, currentUser?.email, currentUser?.id);
+    },
+    [wallets, currentUser]
+  );
+
+  const activeWalletPermissions = useMemo(() => {
+    return getPermissionsForWallet(selectedWalletId);
+  }, [getPermissionsForWallet, selectedWalletId]);
+
   return (
     <WalletContext.Provider
       value={{
@@ -144,6 +226,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         wallets,
         setWallets,
         refreshWallets: fetchWallets,
+        currentUser,
+        activeWalletPermissions,
+        getPermissionsForWallet,
       }}
     >
       {children}

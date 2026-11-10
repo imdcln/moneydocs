@@ -1,5 +1,9 @@
 // ─── Multi-Currency & Exchange Rate Utility ──────────────────────────────────
-// Uses frankfurter.app (ECB data, free, no API key required)
+// Uses https://github.com/fawazahmed0/exchange-api
+// Provides precise daily rates for 200+ currencies (including TWD, VND, IDR, etc.)
+// Primary: jsDelivr CDN (@fawazahmed0/currency-api)
+// Fallback: Cloudflare Pages (currency-api.pages.dev)
+// Secondary Fallback: frankfurter.app
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -7,9 +11,10 @@ interface RatesCache {
   rates: Record<string, number>;
   fetchedAt: number;
   base: string;
+  date?: string;
 }
 
-let ratesCache: RatesCache | null = null;
+const ratesCacheMap: Record<string, RatesCache> = {};
 
 export const SUPPORTED_CURRENCIES = [
   "IDR",
@@ -79,73 +84,138 @@ export function getCurrencyDisplayCode(code: string): string {
 
 /**
  * Fetches exchange rates relative to a given base (default: USD).
- * Uses the Frankfurter API (https://www.frankfurter.app) — ECB data, free, no key required.
+ * Uses fawazahmed0/exchange-api (https://github.com/fawazahmed0/exchange-api):
+ * - Primary: https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/{base}.min.json
+ * - Fallback: https://latest.currency-api.pages.dev/v1/currencies/{base}.min.json
+ * - Secondary Fallback: https://api.frankfurter.app/latest?from={base}
  *
- * Notes:
- * - Frankfurter omits the base currency from its response, so we inject base = 1.
- * - TWD (New Taiwan Dollar) is not in Frankfurter's dataset. We derive it from
- *   the USD cross-rate: TWD_per_base ≈ usdRate * 32.
- * - VND (Vietnamese Dong) is also not in Frankfurter's dataset; derived similarly (× 25400).
+ * Supports precise exchange rates for 200+ currencies including TWD, VND, IDR, etc.
  */
 export async function getExchangeRates(base = "USD", forceRefresh = false): Promise<Record<string, number>> {
+  const normBase = (base === "NTD" ? "TWD" : base || "USD").toUpperCase();
+  const baseKey = normBase.toLowerCase();
   const now = Date.now();
 
-  if (!forceRefresh && ratesCache && ratesCache.base === base && now - ratesCache.fetchedAt < CACHE_TTL_MS) {
-    return ratesCache.rates;
+  const cached = ratesCacheMap[normBase];
+  if (!forceRefresh && cached && now - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.rates;
   }
 
+  const fetchWithTimeout = async (url: string, timeoutMs = 6000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, {
+        signal: controller.signal,
+        next: { revalidate: 3600 },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Try 1: jsDelivr CDN from @fawazahmed0/currency-api
+  // Try 2: Cloudflare Pages fallback
+  const endpoints = [
+    `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${baseKey}.min.json`,
+    `https://latest.currency-api.pages.dev/v1/currencies/${baseKey}.min.json`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetchWithTimeout(url, 6000);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const rawRates = data?.[baseKey];
+
+      if (rawRates && typeof rawRates === "object") {
+        const rates: Record<string, number> = {};
+        for (const [key, val] of Object.entries(rawRates)) {
+          if (typeof val === "number" && !isNaN(val)) {
+            rates[key.toUpperCase()] = val;
+          }
+        }
+
+        // Base currency itself is 1
+        rates[normBase] = 1;
+
+        // Alias NTD to TWD
+        if (normBase === "TWD" || normBase === "NTD") {
+          rates["TWD"] = 1;
+          rates["NTD"] = 1;
+        } else if (rates["TWD"] !== undefined) {
+          rates["NTD"] = rates["TWD"];
+        }
+
+        ratesCacheMap[normBase] = {
+          rates,
+          fetchedAt: now,
+          base: normBase,
+          date: data?.date,
+        };
+
+        return rates;
+      }
+    } catch {
+      // Try next endpoint
+    }
+  }
+
+  // Try 3: Frankfurter API as a secondary backup
   try {
-    const res = await fetch(
-      `https://api.frankfurter.app/latest?from=${base}`,
-      { next: { revalidate: 3600 } }
-    );
+    const frankfurterUrl = `https://api.frankfurter.app/latest?from=${normBase}`;
+    const res = await fetchWithTimeout(frankfurterUrl, 5000);
+    if (res.ok) {
+      const data = await res.json();
+      const rates: Record<string, number> = { ...(data.rates ?? {}) };
+      rates[normBase] = 1;
 
-    if (!res.ok) throw new Error(`Frankfurter API error: ${res.status}`);
+      if (!rates["TWD"]) {
+        const usdRate = rates["USD"] ?? 1;
+        rates["TWD"] = usdRate * 32.85;
+      }
+      if (!rates["NTD"]) {
+        rates["NTD"] = rates["TWD"];
+      }
+      if (!rates["VND"]) {
+        const usdRate = rates["USD"] ?? 1;
+        rates["VND"] = usdRate * 25537;
+      }
 
-    const data = await res.json();
-    const rates: Record<string, number> = { ...(data.rates ?? {}) };
-
-    // Frankfurter omits the base currency itself — add it at 1
-    rates[base] = 1;
-
-    // TWD and VND are not in Frankfurter; derive from USD cross-rate
-    if (!rates["TWD"]) {
-      const usdRate = rates["USD"] ?? 1;
-      // TWD/USD ≈ 32  →  TWD_per_base = usdRate * 32
-      rates["TWD"] = usdRate * 32;
+      ratesCacheMap[normBase] = { rates, fetchedAt: now, base: normBase };
+      return rates;
     }
-    if (!rates["NTD"]) {
-      rates["NTD"] = rates["TWD"];
-    }
-    if (!rates["VND"]) {
-      const usdRate = rates["USD"] ?? 1;
-      // VND/USD ≈ 25400  →  VND_per_base = usdRate * 25400
-      rates["VND"] = usdRate * 25400;
-    }
-
-    ratesCache = { rates, fetchedAt: now, base };
-    return rates;
   } catch (err) {
-    console.error("[currency] Failed to fetch exchange rates from Frankfurter:", err);
-    if (ratesCache) return ratesCache.rates;
-    // Fallback static rates relative to USD if network fails
-    return {
-      USD: 1,
-      IDR: 16200,
-      TWD: 32,
-      NTD: 32,
-      EUR: 0.92,
-      GBP: 0.78,
-      JPY: 155,
-      SGD: 1.34,
-      MYR: 4.7,
-      AUD: 1.52,
-      CAD: 1.37,
-      CNY: 7.24,
-      THB: 36.5,
-      VND: 25400,
-    };
+    console.error("[currency] Secondary Frankfurter fallback failed:", err);
   }
+
+  // Return any existing memory cache (even if expired)
+  if (cached?.rates) {
+    return cached.rates;
+  }
+  const anyCache = Object.values(ratesCacheMap)[0];
+  if (anyCache?.rates) {
+    return anyCache.rates;
+  }
+
+  // Fallback static rates relative to USD if all network requests fail
+  return {
+    USD: 1,
+    IDR: 18100,
+    TWD: 32.85,
+    NTD: 32.85,
+    EUR: 0.896,
+    GBP: 0.747,
+    JPY: 158.3,
+    SGD: 1.28,
+    MYR: 4.06,
+    AUD: 1.45,
+    CAD: 1.41,
+    CNY: 6.67,
+    THB: 33.47,
+    VND: 25537,
+  };
 }
 
 /**
@@ -160,12 +230,12 @@ export function convertCurrency(
   const normFrom = (fromCurrency === "NTD" ? "TWD" : fromCurrency || "IDR").toUpperCase();
   const normTo = (toCurrency === "NTD" ? "TWD" : toCurrency || "IDR").toUpperCase();
   if (normFrom === normTo || !amount) return amount;
-  
-  // Default fallbacks if rates are missing
-  const fromRate = rates[normFrom] || (normFrom === "IDR" ? 16200 : normFrom === "TWD" ? 32 : 1);
-  const toRate = rates[normTo] || (normTo === "IDR" ? 16200 : normTo === "TWD" ? 32 : 1);
 
-  // Convert from -> USD -> to
+  // Default fallbacks if rates are missing
+  const fromRate = rates[normFrom] || (normFrom === "IDR" ? 18100 : normFrom === "TWD" ? 32.85 : 1);
+  const toRate = rates[normTo] || (normTo === "IDR" ? 18100 : normTo === "TWD" ? 32.85 : 1);
+
+  // Convert from -> Base -> to
   const amountInUSD = amount / fromRate;
   return amountInUSD * toRate;
 }

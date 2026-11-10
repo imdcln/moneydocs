@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Eye,
   EyeOff,
@@ -59,6 +60,9 @@ interface Budget {
   order?: number;
   amountLimit: number;
   currency?: string;
+  periodType?: "WEEK" | "MONTH" | "QUARTER" | "YEAR" | "CUSTOM";
+  startDate?: string;
+  endDate?: string;
   spent: number;
   percentUsed: number;
 }
@@ -93,12 +97,23 @@ export default function HomeDashboard({
   totalExpenseConverted,
   monthYear,
 }: HomeDashboardProps) {
+  const router = useRouter();
   const [walletList, setWalletList] = useState<Wallet[]>(wallets);
   const [hideBalance, setHideBalance] = useState(false);
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(
     user.hasCompletedOnboarding === false
   );
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+  const [activeBudgetTab, setActiveBudgetTab] = useState<string>("MONTH");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("last_opened_budget_tab");
+      if (saved && ["WEEK", "MONTH", "QUARTER", "YEAR", "CUSTOM"].includes(saved)) {
+        setActiveBudgetTab(saved);
+      }
+    }
+  }, []);
   const [showTooltip, setShowTooltip] = useState(false);
   const { openModal } = useAdminModal();
   const { currentColor, isThemeLoaded } = useTheme();
@@ -222,7 +237,7 @@ export default function HomeDashboard({
               return (
                 <div
                   key={wallet._id}
-                  onClick={() => setIsWalletModalOpen(true)}
+                  onClick={() => router.push(`/wallets/${wallet._id}`)}
                   className="flex items-center justify-between p-3.5 rounded-2xl bg-[#1b1c22] border border-white/5 hover:border-white/12 transition-all cursor-pointer group"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
@@ -287,66 +302,88 @@ export default function HomeDashboard({
       />
 
       {/* ── Budgets Overview on Home Page ─────────────────────────────────── */}
-      <div className="money-card p-5 bg-[#141519] border border-white/8 rounded-3xl shadow-xl">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Target className="w-4 h-4" style={{ color: currentColor.primaryLight }} />
-            <h3 className="text-white text-base font-bold tracking-tight">Budgets Report</h3>
-          </div>
-          <Link
-            href="/budgets"
-            className="text-xs font-semibold tracking-wide transition-colors"
-            style={{ color: currentColor.primaryLight }}
-          >
-            See all
-          </Link>
-        </div>
+      {(() => {
+        const tabLabel =
+          activeBudgetTab === "WEEK"
+            ? "This Week"
+            : activeBudgetTab === "QUARTER"
+            ? "This Quarter"
+            : activeBudgetTab === "YEAR"
+            ? "This Year"
+            : activeBudgetTab === "CUSTOM"
+            ? "Custom Range"
+            : "This Month";
 
-        {budgets.length === 0 ? (
-          <div className="text-center py-4 text-xs text-slate-400">
-            <p>No active budgets set for this month</p>
-            <Link
-              href="/budgets"
-              className="mt-2 inline-block hover:underline font-semibold"
-              style={{ color: currentColor.primaryLight }}
-            >
-              + Create a category budget
-            </Link>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {budgets.slice(0, 5).map((b) => (
+        const tabBudgets = budgets.filter(
+          (b) => (b.periodType || "MONTH") === activeBudgetTab
+        );
+
+        return (
+          <div className="money-card p-5 bg-[#141519] border border-white/8 rounded-3xl shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4" style={{ color: currentColor.primaryLight }} />
+                <h3 className="text-white text-base font-bold tracking-tight">Budgets Report</h3>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                  {tabLabel}
+                </span>
+              </div>
               <Link
-                key={b._id}
-                href={`/budgets/${b._id}`}
-                className="block p-3 rounded-2xl bg-[#1b1c22] border border-white/5 hover:border-white/12 transition-all cursor-pointer group"
+                href="/budgets"
+                className="text-xs font-semibold tracking-wide transition-colors"
+                style={{ color: currentColor.primaryLight }}
               >
-                <div className="flex items-center justify-between text-xs mb-1.5">
-                  <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
-                    <BudgetCategoryIcons icons={getBudgetCategoryIcons(b)} size="sm" />
-                    <span className="text-white font-semibold truncate">
-                      {getBudgetDisplayName(b)}
-                    </span>
-                  </div>
-                  <span className="text-slate-400 font-medium flex-shrink-0">
-                    {formatMoney(b.spent, b.currency || globalCurrency)} / {formatMoney(b.amountLimit, b.currency || globalCurrency)}
-                  </span>
-                </div>
-                <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${b.percentUsed}%`,
-                      backgroundColor:
-                        b.percentUsed > 90 ? "#ef4444" : b.percentUsed > 70 ? "#f59e0b" : currentColor.primary,
-                    }}
-                  />
-                </div>
+                See all
               </Link>
-            ))}
+            </div>
+
+            {tabBudgets.length === 0 ? (
+              <div className="text-center py-4 text-xs text-slate-400">
+                <p>No active budgets set for {tabLabel.toLowerCase()}</p>
+                <Link
+                  href="/budgets"
+                  className="mt-2 inline-block hover:underline font-semibold"
+                  style={{ color: currentColor.primaryLight }}
+                >
+                  + Create a category budget
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {tabBudgets.slice(0, 5).map((b) => (
+                  <Link
+                    key={b._id}
+                    href={`/budgets/${b._id}`}
+                    className="block p-3 rounded-2xl bg-[#1b1c22] border border-white/5 hover:border-white/12 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between text-xs mb-1.5">
+                      <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                        <BudgetCategoryIcons icons={getBudgetCategoryIcons(b)} size="sm" />
+                        <span className="text-white font-semibold truncate">
+                          {getBudgetDisplayName(b)}
+                        </span>
+                      </div>
+                      <span className="text-slate-400 font-medium flex-shrink-0">
+                        {formatMoney(b.spent, b.currency || globalCurrency)} / {formatMoney(b.amountLimit, b.currency || globalCurrency)}
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${b.percentUsed}%`,
+                          backgroundColor:
+                            b.percentUsed > 90 ? "#ef4444" : b.percentUsed > 70 ? "#f59e0b" : currentColor.primary,
+                        }}
+                      />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* ── Recent Activity ──────────────────────────────────────────────── */}
       <div className="space-y-3">

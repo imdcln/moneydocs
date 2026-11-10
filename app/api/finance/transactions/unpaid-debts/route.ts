@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import Transaction from "@/models/Transaction";
+import Wallet from "@/models/Wallet";
+import { getUserWalletPermissions } from "@/lib/walletPermissions";
 import User from "@/models/User";
 import { isLoanCategory } from "@/lib/categories";
 
@@ -25,8 +27,18 @@ export async function GET(_req: NextRequest) {
   // Find all unpaid debts & loans for the current user
   // (EVERY unpaid will be shown, no matter from what time, even if its next year / last month)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const session = await auth();
+  const userEmail = session?.user?.email?.toLowerCase();
+  const sharedWallets = await Wallet.find({ "sharedWith.email": userEmail }).lean();
+  const readableSharedWalletIds = sharedWallets
+    .filter((w) => getUserWalletPermissions(w as any, userEmail, userId).transactions.read)
+    .map((w) => w._id);
+
   const query: Record<string, any> = {
-    userId: new mongoose.Types.ObjectId(userId),
+    $or: [
+      { userId: new mongoose.Types.ObjectId(userId) },
+      ...(readableSharedWalletIds.length > 0 ? [{ walletId: { $in: readableSharedWalletIds } }] : []),
+    ],
     type: "DEBT",
     debtStatus: { $ne: "PAID" },
     $expr: {
