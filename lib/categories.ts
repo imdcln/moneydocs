@@ -1,4 +1,4 @@
-// ─── Hierarchical Category System (Parent -> Child Subcategories) ───────────
+// â”€â”€â”€ Hierarchical Category System (Parent -> Child Subcategories) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface SubCategory {
   id: string;
@@ -18,7 +18,7 @@ export interface ParentCategory {
 }
 
 export const CATEGORIES_TREE: ParentCategory[] = [
-  // ── EXPENSE CATEGORIES ────────────────────────────────────────────────────
+  // â”€â”€ EXPENSE CATEGORIES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     id: "food_beverage",
     name: "Food & Beverage",
@@ -182,7 +182,7 @@ export const CATEGORIES_TREE: ParentCategory[] = [
     children: [],
   },
 
-  // ── INCOME CATEGORIES ─────────────────────────────────────────────────────
+  // â”€â”€ INCOME CATEGORIES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     id: "salary",
     name: "Salary & Wages",
@@ -244,7 +244,7 @@ export const CATEGORIES_TREE: ParentCategory[] = [
     ],
   },
 
-  // ── DEBT & LOAN CATEGORIES ────────────────────────────────────────────────
+  // â”€â”€ DEBT & LOAN CATEGORIES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     id: "debt",
     name: "Debt",
@@ -387,7 +387,7 @@ export function getCategoryDisplayName(categoryId?: string, subCategoryId?: stri
  * - Multiple: first name + "+N more"
  */
 export function getCategoriesDisplayLabel(keys?: string[]): string {
-  if (!keys || keys.length === 0) return "All Categories";
+  if (!keys || keys.length === 0) return "Select Category";
   if (keys.includes("ALL_CATEGORIES") || keys.includes("ALL") || keys.includes("all_categories")) {
     return "All Categories";
   }
@@ -612,3 +612,118 @@ export const DEBT_CATEGORIES = CATEGORIES_TREE.filter((c) => c.type === "DEBT").
   color: c.color,
   bgColor: c.bgColor,
 }));
+
+
+export interface ResolvedCategory {
+  parentId: string;
+  parentName: string;
+  subId?: string;
+  subName?: string;
+  isCustom?: boolean;
+}
+
+/**
+ * Resolves any category and optional subcategory into canonical parent and child.
+ * Handles cases where category is already a subcategory, legacy keys, or direct parent transactions.
+ */
+export function resolveCategoryHierarchy(
+  categoryId?: string,
+  subCategoryId?: string
+): ResolvedCategory {
+  if (!categoryId || categoryId.trim() === "") {
+    return {
+      parentId: "other_expense",
+      parentName: "Other Expense",
+      subId: undefined,
+      subName: undefined,
+    };
+  }
+
+  // 1. Direct parent match
+  const parent = getParentCategory(categoryId);
+  if (parent) {
+    if (subCategoryId) {
+      const child = parent.children.find((c) => c.id === subCategoryId);
+      if (child) {
+        return {
+          parentId: parent.id,
+          parentName: parent.name,
+          subId: child.id,
+          subName: child.name,
+        };
+      }
+      const otherSub = getSubCategory(subCategoryId);
+      if (otherSub) {
+        return {
+          parentId: parent.id,
+          parentName: parent.name,
+          subId: otherSub.child.id,
+          subName: otherSub.child.name,
+        };
+      }
+      return {
+        parentId: parent.id,
+        parentName: parent.name,
+        subId: subCategoryId,
+        subName: subCategoryId.replace(/_/g, " "),
+      };
+    }
+    return {
+      parentId: parent.id,
+      parentName: parent.name,
+      subId: undefined,
+      subName: undefined,
+    };
+  }
+
+  // 2. Check if categoryId itself was passed as a subcategory id
+  const sub = getSubCategory(categoryId);
+  if (sub) {
+    return {
+      parentId: sub.parent.id,
+      parentName: sub.parent.name,
+      subId: sub.child.id,
+      subName: sub.child.name,
+    };
+  }
+
+  // 3. Custom / fallback category
+  return {
+    parentId: categoryId,
+    parentName: categoryId.replace(/_/g, " "),
+    subId: subCategoryId || undefined,
+    subName: subCategoryId ? subCategoryId.replace(/_/g, " ") : undefined,
+    isCustom: true,
+  };
+}
+
+export interface TrendComparison {
+  delta: number | null;
+  trending: "up" | "down" | "flat";
+  percentText: string;
+}
+
+/**
+ * Calculates trend comparison between current and previous period.
+ */
+export function calculateTrendComparison(
+  cur: number,
+  prev: number,
+  periodUnitLabel: string = "prev month"
+): TrendComparison {
+  if (prev === 0 && cur === 0) {
+    return { delta: 0, trending: "flat", percentText: "–" };
+  }
+  if (prev === 0 && cur > 0) {
+    return { delta: null, trending: "up", percentText: "New this month" };
+  }
+  if (prev > 0 && cur === 0) {
+    return { delta: -100, trending: "down", percentText: `-100% vs ${periodUnitLabel}` };
+  }
+  const delta = ((cur - prev) / prev) * 100;
+  const trending: "up" | "down" | "flat" =
+    delta > 5 ? "up" : delta < -5 ? "down" : "flat";
+  const sign = delta > 0 ? "▲" : delta < 0 ? "▼" : "–";
+  const percentText = `${sign} ${Math.abs(Math.round(delta))}% vs ${periodUnitLabel}`;
+  return { delta, trending, percentText };
+}

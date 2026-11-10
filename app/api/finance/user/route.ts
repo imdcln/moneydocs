@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/models/User";
@@ -20,7 +20,7 @@ export async function GET() {
     // Google accounts are inherently verified; simple auth accounts check isVerified flag
     const isVerified = authProvider === "google" ? true : Boolean(user.isVerified);
 
-    return NextResponse.json({
+    const userRes = NextResponse.json({
       user: {
         id: String((user as { _id: unknown })._id),
         name: user.name,
@@ -34,6 +34,8 @@ export async function GET() {
         profileColor: user.profileColor || "from-pink-500 to-rose-400",
       },
     });
+    userRes.headers.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    return userRes;
   } catch (error) {
     console.error("[user GET error]:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

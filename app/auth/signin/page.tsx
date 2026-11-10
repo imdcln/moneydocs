@@ -22,8 +22,9 @@ import { GoogleIcon } from "@/components/ui/AppIcons";
 import PageLoading from "@/components/ui/PageLoading";
 import { useTheme } from "@/context/ThemeContext";
 import { getClientDeviceId } from "@/lib/clientDevice";
+import { useToast } from "@/components/ui/Toast";
 
-// ─── OTP Input ───────────────────────────────────────────────────────────────
+//  OTP Input 
 
 interface OtpInputProps {
   value: string[];
@@ -126,12 +127,13 @@ function OtpInput({ value, onChange, disabled, accentColor, accentBorder, accent
   );
 }
 
-// ─── Main Form ────────────────────────────────────────────────────────────────
+//  Main Form 
 
 function AuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentColor, isThemeLoaded } = useTheme();
+  const { toast } = useToast();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -185,6 +187,58 @@ function AuthForm() {
     }
   }, [searchParams]);
 
+
+  // Detect when the user returned to this page after starting (but not completing) Google sign-in.
+  // Covers:
+  //   1. Full-reload on back: useEffect runs on initial mount.
+  //   2. bfcache restore (browser unfreezes page, React state preserved):
+  //      "pageshow" fires with event.persisted === true.
+  //   3. Tab focus / visibility return: "visibilitychange".
+  useEffect(() => {
+    const handleGoogleCancelled = (e?: PageTransitionEvent) => {
+      try {
+        const pending = sessionStorage.getItem("google_signin_pending");
+        if (pending) {
+          const timestamp = parseInt(pending, 10);
+          const elapsed = Date.now() - timestamp;
+          // If within 1 second and not a bfcache restore event, don't trigger yet (just clicked)
+          if (!isNaN(timestamp) && elapsed < 1200 && !e?.persisted) {
+            return;
+          }
+
+          sessionStorage.removeItem("google_signin_pending");
+          setGoogleLoading(false);
+          const msg = "Failed to sign in with Google. The sign-in process was cancelled.";
+          setError(msg);
+          toast(msg, "error");
+        } else if (e?.persisted) {
+          // If restored from bfcache without a pending flag, still ensure loading spinner is undone
+          setGoogleLoading(false);
+        }
+      } catch {}
+    };
+
+    // Case 1: mount (page reload upon pressing back)
+    handleGoogleCancelled();
+
+    // Case 2: bfcache restore
+    window.addEventListener("pageshow", handleGoogleCancelled);
+
+    // Case 3: visibility change (returning to tab / standalone PWA window)
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        handleGoogleCancelled();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("pageshow", handleGoogleCancelled);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Cleanup resend timer on unmount
   useEffect(() => {
     return () => { if (resendTimer.current) clearInterval(resendTimer.current); };
@@ -221,19 +275,30 @@ function AuthForm() {
       const data = res ? await res.json().catch(() => ({})) : {};
 
       if (data && data.googleConfigured === false) {
-        setError(
-          "Google OAuth is not yet configured on this server. Please add your GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET into .env.local."
-        );
+        const cfgMsg = "Google OAuth is not yet configured on this server. Please add your GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET into .env.local.";
+        setError(cfgMsg);
+        toast(cfgMsg, "error");
         setGoogleLoading(false);
         return;
       }
+
+      // Record timestamp so we know an OAuth redirect was initiated.
+      // Do NOT remove this flag immediately after signIn() because signIn()
+      // initiates the redirect asynchronously and resolving does NOT mean navigation is finished.
+      try {
+        sessionStorage.setItem("google_signin_pending", Date.now().toString());
+      } catch {}
 
       await signIn("google", { callbackUrl: "/" });
     } catch (err: unknown) {
       console.error("[google sign-in error]:", err);
       const message = err instanceof Error ? err.message : "Failed to initiate Google sign-in";
       setError(message);
+      toast(message, "error");
       setGoogleLoading(false);
+      try {
+        sessionStorage.removeItem("google_signin_pending");
+      } catch {}
     }
   };
 
@@ -302,7 +367,7 @@ function AuthForm() {
           return;
         }
 
-        // 2a. If account has email OTP enabled → request OTP and switch to OTP step
+        // 2a. If account has email OTP enabled  request OTP and switch to OTP step
         if (verifyData.isVerified && verifyData.emailOtpEnabled) {
           const otpRes = await fetch("/api/auth/send-login-otp", {
             method: "POST",
@@ -323,9 +388,9 @@ function AuthForm() {
           // Switch to OTP view
           // In dev mode, auto-fill the OTP from the response if SMTP is unavailable
           if (otpData.devOtp) {
-            // Dev: SMTP failed but server returned the OTP directly — auto-fill for convenience
+            // Dev: SMTP failed but server returned the OTP directly  auto-fill for convenience
             setOtpDigits(String(otpData.devOtp).split(""));
-            setSuccess("[DEV] SMTP offline — OTP auto-filled. Check terminal for the code.");
+            setSuccess("[DEV] SMTP offline  OTP auto-filled. Check terminal for the code.");
           } else {
             setOtpDigits(Array(6).fill(""));
           }
@@ -336,7 +401,7 @@ function AuthForm() {
           return;
         }
 
-        // 2b. Unverified accounts → sign in directly (no OTP)
+        // 2b. Unverified accounts  sign in directly (no OTP)
         const res = await signIn("credentials", {
           email,
           password,
@@ -361,7 +426,7 @@ function AuthForm() {
     }
   };
 
-  // ── OTP submit ──────────────────────────────────────────────────────────────
+  //  OTP submit 
 
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -396,7 +461,7 @@ function AuthForm() {
       }
 
       // 2. Establish NextAuth session
-      setSuccess("Code verified! Signing you in…");
+      setSuccess("Code verified! Signing you in");
       const res = await signIn("credentials", {
         email,
         password,
@@ -420,7 +485,7 @@ function AuthForm() {
     }
   };
 
-  // ── Resend OTP ──────────────────────────────────────────────────────────────
+  //  Resend OTP 
 
   const handleResend = async () => {
     if (resendCooldown > 0) return;
@@ -447,9 +512,9 @@ function AuthForm() {
     }
   };
 
-  // ─────────────────────────────────────────────────────────────────────────────
+  // 
   // Render
-  // ─────────────────────────────────────────────────────────────────────────────
+  // 
 
   return (
     <div
@@ -472,7 +537,7 @@ function AuthForm() {
         {/* Main Card */}
         <div className="backdrop-blur-2xl bg-white/[0.04] border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl">
 
-          {/* ── OTP step ─────────────────────────────────────────────────── */}
+          {/*  OTP step  */}
           {mode === "otp" ? (
             <>
               {/* Header */}
@@ -502,7 +567,7 @@ function AuthForm() {
               {/* Error / Success banners */}
               {error && (
                 <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3.5 mb-4 text-xs text-red-300 flex items-start gap-2.5">
-                  <span className="text-base leading-none mt-0.5">⚠️</span>
+                  <span className="text-base leading-none mt-0.5"></span>
                   <div className="flex-1 space-y-1">
                     <p className="font-medium text-red-200 leading-snug">
                       {error.split(" [")[0]}
@@ -526,7 +591,7 @@ function AuthForm() {
                     color: currentColor.primaryLight,
                   }}
                 >
-                  <span className="text-sm">✓</span>
+                  <span className="text-sm"></span>
                   <span>{success}</span>
                 </div>
               )}
@@ -607,7 +672,7 @@ function AuthForm() {
             </>
           ) : (
             <>
-              {/* ── Sign in / Register step ─────────────────────────────── */}
+              {/*  Sign in / Register step  */}
 
               {/* Logo & Header */}
               <div className="flex flex-col items-center mb-6">
@@ -620,7 +685,7 @@ function AuthForm() {
                   }}
                 >
                   <Image
-                    src="/assets/favicon2.png"
+                    src="/assets/favicon.png"
                     alt="Money Docs Logo"
                     width={52}
                     height={52}
@@ -691,7 +756,7 @@ function AuthForm() {
               {/* Error / Success Banners */}
               {error && (
                 <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3.5 mb-4 text-xs text-red-300 flex items-start gap-2.5">
-                  <span className="text-base leading-none mt-0.5">⚠️</span>
+                  <span className="text-base leading-none mt-0.5"></span>
                   <div className="flex-1 space-y-1">
                     <p className="font-medium text-red-200 leading-snug">
                       {error.split(" [")[0]}
@@ -715,7 +780,7 @@ function AuthForm() {
                     color: currentColor.primaryLight,
                   }}
                 >
-                  <span className="text-sm">✓</span>
+                  <span className="text-sm"></span>
                   <span>{success}</span>
                 </div>
               )}

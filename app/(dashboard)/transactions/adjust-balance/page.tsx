@@ -15,6 +15,7 @@ import {
   Layers,
   Banknote,
   LucideIcon,
+  Lock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import CustomKeypad, { safeEvaluateMath } from "@/components/admin/CustomKeypad";
@@ -258,7 +259,7 @@ function AdjustBalanceContent() {
   const searchParams = useSearchParams();
   const initialWalletId = searchParams.get("walletId");
 
-  const { selectedWalletId: globalSelectedWalletId, refreshWallets } = useWalletContext();
+  const { selectedWalletId: globalSelectedWalletId, refreshWallets, getPermissionsForWallet } = useWalletContext();
 
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -270,6 +271,10 @@ function AdjustBalanceContent() {
   const [error, setError] = useState("");
   const [isWalletPickerOpen, setIsWalletPickerOpen] = useState(false);
   const [isKeypadOpen, setIsKeypadOpen] = useState(false);
+  const permittedWallets = wallets.filter((w) => getPermissionsForWallet(w._id).editBalance);
+  const currentWalletPerms = getPermissionsForWallet(selectedWalletId);
+  const canEditCurrentWallet = !selectedWalletId || currentWalletPerms.editBalance;
+
 
   useEffect(() => {
     fetch("/api/finance/wallets")
@@ -277,17 +282,20 @@ function AdjustBalanceContent() {
       .then((d) => {
         const list: Wallet[] = d.wallets ?? [];
         setWallets(list);
-        if (list.length > 0) {
+        const editableList = list.filter((w) => getPermissionsForWallet(w._id).editBalance);
+        if (editableList.length > 0) {
           const preferredId =
             initialWalletId ||
             (globalSelectedWalletId !== "ALL" ? globalSelectedWalletId : null);
           const match =
-            list.find((w) => w._id === preferredId) ||
-            list.find((w) => w.isDefault) ||
-            list[0];
+            editableList.find((w) => w._id === preferredId) ||
+            editableList.find((w) => w.isDefault) ||
+            editableList[0];
           setSelectedWalletId(match._id);
           setRawAmount(String(match.balance || 0));
           setExcludeFromReport(match.excludeFromReport ?? true);
+        } else if (list.length > 0) {
+          setSelectedWalletId(list[0]._id);
         }
       })
       .catch((err) => {
@@ -426,7 +434,27 @@ function AdjustBalanceContent() {
         subtitle="Preparing balance adjustment"
       />
     );
-  }
+  }
+  if (!loading && (permittedWallets.length === 0 || !canEditCurrentWallet)) {
+    return (
+      <div className="min-h-screen bg-[#0e1014] text-white flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-4 shadow-lg shadow-amber-500/5">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold mb-2">Access Restricted</h2>
+        <p className="text-sm text-slate-400 max-w-sm mb-6 leading-relaxed">
+          You do not have permission to adjust the balance for this wallet.
+        </p>
+        <button
+          onClick={() => router.push("/transactions")}
+          className="px-6 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-sm font-semibold transition-colors"
+        >
+          Back to transactions
+        </button>
+      </div>
+    );
+  }
+
 
   if (wallets.length === 0) {
     return (
@@ -643,7 +671,7 @@ function AdjustBalanceContent() {
       <WalletPickerModal
         isOpen={isWalletPickerOpen}
         onClose={() => setIsWalletPickerOpen(false)}
-        wallets={wallets}
+        wallets={permittedWallets}
         selectedWalletId={selectedWalletId}
         onSelect={handleWalletSelect}
       />

@@ -95,7 +95,8 @@ export default function CustomKeypad({
       if (/[+×÷\-\*\/]/.test(value)) {
         const evaluated = safeEvaluateMath(value);
         onChange(evaluated);
-      } else if (onSubmit) {
+      }
+      if (onSubmit) {
         onSubmit();
       }
       return;
@@ -289,7 +290,7 @@ export default function CustomKeypad({
           onClick={() => handleKeyClick("SUBMIT")}
           className="row-span-2 rounded-2xl bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white flex items-center justify-center transition-transform active:scale-95 shadow-lg cursor-pointer"
           style={{ boxShadow: "0 8px 20px -4px var(--color-primary-glow)" }}
-          aria-label="Submit or evaluate"
+          aria-label="Enter amount"
         >
           <ChevronRight className="w-8 h-8 text-white stroke-[2.5]" />
         </button>

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
@@ -25,6 +25,7 @@ import CurrencyFlag from "@/components/admin/CurrencyFlag";
 import { useTheme } from "@/context/ThemeContext";
 import { GoogleIcon } from "@/components/ui/AppIcons";
 import PageLoading from "@/components/ui/PageLoading";
+import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from "@/lib/clientCache";
 
 interface Wallet {
   _id: string;
@@ -43,8 +44,20 @@ export default function AccountPage() {
   const [userImage, setUserImage] = useState<string | null>(null);
   const [isVerified, setIsVerified] = useState(false);
   const [authProvider, setAuthProvider] = useState<"credentials" | "google">("credentials");
-  const [wallets, setWallets] = useState<Wallet[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [wallets, setWallets] = useState<Wallet[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<Wallet[]>(CACHE_KEYS.WALLETS);
+      if (cached && Array.isArray(cached) && cached.length > 0) return cached;
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<Wallet[]>(CACHE_KEYS.WALLETS);
+      if (cached && Array.isArray(cached) && cached.length > 0) return false;
+    }
+    return true;
+  });
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
@@ -69,34 +82,55 @@ export default function AccountPage() {
     window.addEventListener("profile-color-changed", handleColorChange as EventListener);
     window.addEventListener("profile-image-changed", handleImageChange as EventListener);
 
+    // Serve cached data instantly while fetching fresh data in background
+    const cachedUser = getCache<Record<string, string>>(CACHE_KEYS.USER);
+    const cachedWallets = getCache<Wallet[]>(CACHE_KEYS.WALLETS);
+
+    const applyUserData = (user: Record<string, string>) => {
+      setUserName(user.name || "Declane");
+      setUserEmail(user.email || "declane.docs@gmail.com");
+      setIsVerified(Boolean(user.isVerified));
+      setAuthProvider((user.authProvider as "credentials" | "google") || "credentials");
+      if (user.baseCurrency) setBaseCurrency(user.baseCurrency);
+      if (user.profileColor) {
+        setProfileColor(user.profileColor);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("dclne_profile_color", user.profileColor);
+        }
+      }
+      if (user.image !== undefined) {
+        setUserImage(user.image || null);
+        if (typeof window !== "undefined") {
+          if (user.image) {
+            localStorage.setItem("dclne_profile_image", user.image);
+          } else {
+            localStorage.removeItem("dclne_profile_image");
+          }
+        }
+      }
+    };
+
+    if (cachedUser && cachedWallets) {
+      // Instant render from cache
+      applyUserData(cachedUser);
+      setWallets(cachedWallets);
+      setLoading(false);
+    }
+
+    // Always fetch fresh data (cache will be updated for next visit)
     Promise.all([
       fetch("/api/finance/user").then((r) => r.json()).catch(() => ({})),
       fetch("/api/finance/wallets").then((r) => r.json()).catch(() => ({})),
     ]).then(([userData, walletData]) => {
       if (userData.user) {
-        setUserName(userData.user.name || "Declane");
-        setUserEmail(userData.user.email || "declane.docs@gmail.com");
-        setIsVerified(Boolean(userData.user.isVerified));
-        setAuthProvider(userData.user.authProvider || "credentials");
-        if (userData.user.baseCurrency) setBaseCurrency(userData.user.baseCurrency);
-        if (userData.user.profileColor) {
-          setProfileColor(userData.user.profileColor);
-          if (typeof window !== "undefined") {
-            localStorage.setItem("dclne_profile_color", userData.user.profileColor);
-          }
-        }
-        if (userData.user.image !== undefined) {
-          setUserImage(userData.user.image);
-          if (typeof window !== "undefined") {
-            if (userData.user.image) {
-              localStorage.setItem("dclne_profile_image", userData.user.image);
-            } else {
-              localStorage.removeItem("dclne_profile_image");
-            }
-          }
-        }
+        applyUserData(userData.user);
+        setCache(CACHE_KEYS.USER, userData.user, CACHE_TTL.USER);
       }
-      setWallets(walletData.wallets ?? []);
+      const freshWallets = walletData.wallets ?? [];
+      setWallets(freshWallets);
+      if (freshWallets.length > 0) {
+        setCache(CACHE_KEYS.WALLETS, freshWallets, CACHE_TTL.WALLETS);
+      }
       setLoading(false);
     });
 
@@ -125,7 +159,7 @@ export default function AccountPage() {
 
   return (
     <div className="px-4 pt-3 pb-nav-safe max-w-lg mx-auto space-y-5">
-      {/* ── Top Bar ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Top Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="flex items-center justify-between py-1">
         <h1 className="text-white text-2xl font-bold tracking-tight">Account &amp; Settings</h1>
         <Link
@@ -137,7 +171,7 @@ export default function AccountPage() {
         </Link>
       </div>
 
-      {/* ── User Profile Card (Clickable to My Account page) ───────────────────────── */}
+      {/* â”€â”€ User Profile Card (Clickable to My Account page) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="block money-card p-6 bg-[#141519] border border-white/8 hover:border-white/15 rounded-3xl text-center relative overflow-hidden shadow-xl transition-all group">
         {/* Dynamic circular avatar with picture / letter and change profile trigger */}
         <div className="relative mx-auto w-20 h-20 mb-3 flex items-center justify-center">
@@ -219,7 +253,7 @@ export default function AccountPage() {
         </Link>
       </div>
 
-      {/* ── Menu List Items ─────────────────────────────────────────────── */}
+      {/* â”€â”€ Menu List Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="money-card bg-[#141519] border border-white/8 rounded-3xl divide-y divide-white/5 overflow-hidden shadow-lg">
         {/* Primary Theme Color Menu */}
         <button

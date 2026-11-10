@@ -1,4 +1,4 @@
-// ─── Budget Date & Calculation Utilities ───────────────────────────────────────
+// â”€â”€â”€ Budget Date & Calculation Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import { getCategoryDisplayName, getCategoriesDisplayLabel } from "@/lib/categories";
 
@@ -355,7 +355,7 @@ export function getBudgetCategoryIcons(budget: {
       : [];
 
   if (rawKeys.length === 0) {
-    return [{ parentId: "ALL_CATEGORIES" }];
+    return [];
   }
 
   // Deduplicate by parent category while preserving selection order

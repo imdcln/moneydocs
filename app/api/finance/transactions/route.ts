@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
@@ -12,6 +12,7 @@ import { isLoanCategory } from "@/lib/categories";
 import { createAndSendNotification } from "@/lib/notifications";
 import { getRunningBudgetsQuery, isTransactionMatchingBudget } from "@/lib/budgetServer";
 import { notifyWalletTransactionActivity } from "@/lib/walletNotifications";
+import { getUserWalletPermissions } from "@/lib/walletPermissions";
 
 async function getUserId(): Promise<string | null> {
   const session = await auth();
@@ -29,8 +30,15 @@ async function getFullUser() {
 }
 
 export async function GET(req: NextRequest) {
-  const userId = await getUserId();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const session = await auth();
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await connectDB();
+  const user = await User.findOne({ email: session.user.email }).select("_id").lean() as { _id: { toString(): string } } | null;
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const userId = String(user._id);
+  const userEmail = session.user.email.toLowerCase();
 
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type");
@@ -45,14 +53,43 @@ export async function GET(req: NextRequest) {
   const limitParam = searchParams.get("limit");
   const limit = limitParam ? Math.min(1000, Math.max(1, parseInt(limitParam))) : 50;
 
-  await connectDB();
-
-  // Build query
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const query: Record<string, any> = { userId };
+  const query: Record<string, any> = {};
+
+  if (walletId && walletId !== "ALL" && walletId !== "GLOBAL") {
+    if (Types.ObjectId.isValid(walletId)) {
+      const targetWallet = await Wallet.findById(walletId).lean();
+      if (!targetWallet) {
+        return NextResponse.json({ transactions: [], total: 0, page, limit });
+      }
+      const perms = getUserWalletPermissions(targetWallet as any, userEmail, userId);
+      if (!perms.transactions.read) {
+        return NextResponse.json({ transactions: [], total: 0, page, limit });
+      }
+      query.walletId = new Types.ObjectId(walletId);
+    } else {
+      return NextResponse.json({ transactions: [], total: 0, page, limit });
+    }
+  } else if (walletId === "GLOBAL") {
+    query.userId = userId;
+    query.walletId = { $in: [null, undefined] };
+  } else {
+    // "ALL" or omitted: show user's own txs + txs from any shared wallet user can read
+    const sharedWallets = await Wallet.find({
+      "sharedWith.email": userEmail,
+    }).lean();
+    const readableSharedWalletIds = sharedWallets
+      .filter((w) => getUserWalletPermissions(w as any, userEmail, userId).transactions.read)
+      .map((w) => w._id);
+
+    query.$or = [
+      { userId },
+      ...(readableSharedWalletIds.length > 0 ? [{ walletId: { $in: readableSharedWalletIds } }] : []),
+    ];
+  }
+
   if (type) query.type = type;
   if (category) query.category = category;
-  if (walletId) query.walletId = walletId;
   if (search) query.title = { $regex: search, $options: "i" };
   if (dateFrom || dateTo) {
     query.date = {};
@@ -71,7 +108,9 @@ export async function GET(req: NextRequest) {
     Transaction.countDocuments(query),
   ]);
 
-  return NextResponse.json({ transactions, total, page, limit });
+  const txRes = NextResponse.json({ transactions, total, page, limit });
+  txRes.headers.set("Cache-Control", "private, max-age=5, stale-while-revalidate=15");
+  return txRes;
 }
 
 export async function POST(req: NextRequest) {
@@ -119,10 +158,21 @@ export async function POST(req: NextRequest) {
   const cleanDescription = description ? String(description).trim().slice(0, 500).replace(/[<>]/g, "") : undefined;
   const cleanDebtParty = debtParty ? String(debtParty).trim().slice(0, 100).replace(/[<>]/g, "") : undefined;
 
+  const session = await auth();
   let validWalletId: string | undefined = undefined;
   if (walletId && typeof walletId === "string" && walletId !== "ALL" && walletId !== "GLOBAL") {
     if (walletId.match(/^[0-9a-fA-F]{24}$/)) {
       validWalletId = walletId;
+      const targetWallet = await Wallet.findById(validWalletId).lean();
+      if (targetWallet) {
+        const perms = getUserWalletPermissions(targetWallet as any, session?.user?.email, userId);
+        if (!perms.transactions.create) {
+          return NextResponse.json(
+            { error: "You do not have permission to create transactions in this wallet" },
+            { status: 403 }
+          );
+        }
+      }
     }
   }
 
@@ -179,7 +229,7 @@ export async function POST(req: NextRequest) {
     debtStatus: debtStatus ?? "UNPAID",
   });
 
-  // Update wallet balance — delta must be in the wallet's OWN currency, not IDR
+  // Update wallet balance â€” delta must be in the wallet's OWN currency, not IDR
   if (validWalletId) {
     const wallet = await Wallet.findById(validWalletId).select("currency").lean();
     const walletCurrency = (wallet as { currency?: string } | null)?.currency ?? "IDR";
@@ -285,7 +335,7 @@ async function checkBudgetAlerts(
 
       const categoryLabel =
         budget.subCategory
-          ? `${budget.category} › ${budget.subCategory}`
+          ? `${budget.category} â€º ${budget.subCategory}`
           : budget.category === "ALL_CATEGORIES" || budget.category === "ALL"
           ? "All Categories"
           : budget.category;
@@ -295,7 +345,7 @@ async function checkBudgetAlerts(
         createAndSendNotification({
           userId,
           type: "BUDGET",
-          title: "Budget Warning ⚠️",
+          title: "Budget Warning âš ï¸",
           message: `You've spent ${Math.round(percent)}% of your "${categoryLabel}" budget for this month.`,
           link: "/budgets",
           metadata: { budgetId: String((budget as { _id: unknown })._id), percent: Math.round(percent) },
@@ -319,7 +369,7 @@ async function checkBudgetAlerts(
   }
 }
 
-/** DELETE /api/finance/transactions — Delete single or multiple transactions with wallet balance rollback */
+/** DELETE /api/finance/transactions â€” Delete single or multiple transactions with wallet balance rollback */
 export async function DELETE(req: NextRequest) {
   const userId = await getUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

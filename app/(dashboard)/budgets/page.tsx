@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
@@ -11,18 +11,21 @@ import {
   PlayCircle,
   GripVertical,
   ArrowUpDown,
+  AlertTriangle,
+  Lock,
 } from "lucide-react";
 import { Reorder, useDragControls, motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/components/ui/Toast";
 import { EmptyBudgetIllustration } from "@/components/ui/AppIcons";
 import CategoryIcon, { AllCategoriesGlobeGraphic } from "@/components/ui/CategoryIcon";
 import { getCategoryDisplayName } from "@/lib/categories";
-import { getDaysBetween, getBudgetCategoryIcons, getBudgetDisplayName } from "@/lib/budgetUtils";
+import { type BudgetPeriodType, getDaysBetween, getBudgetCategoryIcons, getBudgetDisplayName } from "@/lib/budgetUtils";
 import BudgetCategoryIcons from "@/components/admin/budget/BudgetCategoryIcons";
 import AddBudgetModal from "@/components/admin/budget/AddBudgetModal";
 import WalletSwitcher from "@/components/admin/WalletSwitcher";
 import { useWalletContext } from "@/hooks/useWalletContext";
 import PageLoading from "@/components/ui/PageLoading";
+import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from "@/lib/clientCache";
 
 interface BudgetDetailData {
   _id: string;
@@ -43,15 +46,18 @@ interface BudgetDetailData {
   order?: number;
   walletId?: { _id: string; name: string; currency?: string } | string;
   isOtherCategories?: boolean;
+  childBudgetsTotal?: number;
+  childBudgetsExceed?: boolean;
+  childBudgetsExceededAmount?: number;
 }
 
-// â”€â”€ Speedometer Gauge SVG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// A true upper semicircle (180Â° arc) running from left (-R, 0) to right (+R, 0).
+// Ã¢â€â‚¬Ã¢â€â‚¬ Speedometer Gauge SVG Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// A true upper semicircle (180Ã‚Â° arc) running from left (-R, 0) to right (+R, 0).
 // Both ends sit at the exact same horizontal baseline (the same Y axis).
 // Green progress sweeps clockwise from the left (0% spent) up over the arch.
 // A white-filled circular indicator with green border marks the spent boundary.
 function SpeedometerGauge({
-  spentPercent,      // 0â€“100, percentage of total budget spent
+  spentPercent,      // 0Ã¢â‚¬â€œ100, percentage of total budget spent
   canSpend,          // numeric remaining amount
   isOver = false,    // whether spending is above budget limit
   overspentAmount = 0, // how much over budget
@@ -66,7 +72,7 @@ function SpeedometerGauge({
   const R = 110;
   const strokeWidth = 8;
 
-  // Semicircle: from 180Â° (left, (cx - R, cy)) clockwise over the top (90Â°) to 0Â° (right, (cx + R, cy))
+  // Semicircle: from 180Ã‚Â° (left, (cx - R, cy)) clockwise over the top (90Ã‚Â°) to 0Ã‚Â° (right, (cx + R, cy))
   // In standard SVG coordinate system:
   // Left point: (cx - R, cy)
   // Right point: (cx + R, cy)
@@ -82,14 +88,14 @@ function SpeedometerGauge({
   const clamped = isOver ? 100 : Math.min(100, Math.max(0, spentPercent));
   
   // Angle for progress:
-  // at 0%: theta = Ï€ (180Â°), x = cx - R, y = cy
-  // at 50%: theta = Ï€/2 (90Â°), x = cx, y = cy - R (the top peak)
-  // at 100%: theta = 0 (0Â°), x = cx + R, y = cy
+  // at 0%: theta = Ãâ‚¬ (180Ã‚Â°), x = cx - R, y = cy
+  // at 50%: theta = Ãâ‚¬/2 (90Ã‚Â°), x = cx, y = cy - R (the top peak)
+  // at 100%: theta = 0 (0Ã‚Â°), x = cx + R, y = cy
   const theta = Math.PI - (clamped / 100) * Math.PI;
   const dotX = cx + R * Math.cos(theta);
   const dotY = cy - R * Math.sin(theta);
 
-  // Large arc flag is 1 if angle swept > 180Â°, but for a semicircle max sweep is 180Â°, so largeArc is always 0
+  // Large arc flag is 1 if angle swept > 180Ã‚Â°, but for a semicircle max sweep is 180Ã‚Â°, so largeArc is always 0
   const progressPath =
     clamped > 0.5
       ? `M ${leftX} ${leftY} A ${R} ${R} 0 0 1 ${dotX.toFixed(2)} ${dotY.toFixed(2)}`
@@ -178,7 +184,7 @@ function SpeedometerGauge({
   );
 }
 
-// â”€â”€ Finished Budget Period Group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬ Finished Budget Period Group Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 // Groups finished budgets that share the same period (same startDate+endDate).
 interface FinishedPeriodGroup {
   key: string;
@@ -361,23 +367,63 @@ function DraggableBudgetCard({
   );
 }
 
+const PERIOD_CONFIG: Record<BudgetPeriodType, { label: string; endLabel: string }> = {
+  MONTH: { label: "This Month", endLabel: "End of month" },
+  WEEK: { label: "This Week", endLabel: "End of week" },
+  QUARTER: { label: "This Quarter", endLabel: "End of quarter" },
+  YEAR: { label: "This Year", endLabel: "End of year" },
+  CUSTOM: { label: "Custom", endLabel: "End of period" },
+};
+const ORDERED_PERIODS: BudgetPeriodType[] = ["MONTH", "WEEK", "QUARTER", "YEAR", "CUSTOM"];
+
 export default function BudgetsPage() {
   const now = new Date();
   const currentMonthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // â”€â”€ Mode: "running" | "finished" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Mode: "running" | "finished" Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [pageMode, setPageMode] = useState<"running" | "finished">("running");
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
 
   const [monthYear, setMonthYear] = useState(currentMonthYear);
-  const [budgets, setBudgets] = useState<BudgetDetailData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [activePeriodTab, setActivePeriodTab] = useState<BudgetPeriodType>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("last_opened_budget_tab") as BudgetPeriodType | null;
+      if (saved && ["WEEK", "MONTH", "QUARTER", "YEAR", "CUSTOM"].includes(saved)) {
+        return saved;
+      }
+    }
+    return "MONTH";
+  });
+  const [budgets, setBudgets] = useState<BudgetDetailData[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<BudgetDetailData[]>("moneydocs_budgets_initial");
+      if (cached && Array.isArray(cached) && cached.length > 0) return cached;
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    if (typeof window !== "undefined") {
+      const cached = getCache<BudgetDetailData[]>("moneydocs_budgets_initial");
+      if (cached && Array.isArray(cached) && cached.length > 0) return false;
+    }
+    return true;
+  });
   const [userCurrency, setUserCurrency] = useState("IDR");
 
-  const { wallets, selectedWalletId } = useWalletContext();
+  const { wallets, selectedWalletId, activeWalletPermissions, getPermissionsForWallet } = useWalletContext();
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingBudget, setEditingBudget] = useState<BudgetDetailData | null>(null);
+  const canReadBudgets =
+    selectedWalletId === "ALL"
+      ? (wallets as any[]).some((w) => getPermissionsForWallet(w._id).budgets.read)
+      : activeWalletPermissions.budgets.read;
+
+  const canCreateBudgets =
+    selectedWalletId === "ALL"
+      ? (wallets as any[]).some((w) => getPermissionsForWallet(w._id).budgets.create)
+      : activeWalletPermissions.budgets.create;
+
   const budgetFetchAbortRef = useRef<AbortController | null>(null);
 
   // Drag and drop reordering state
@@ -404,7 +450,9 @@ export default function BudgetsPage() {
     const controller = new AbortController();
     budgetFetchAbortRef.current = controller;
     await Promise.resolve();
-    setLoading(true);
+    if (budgets.length === 0) {
+      setLoading(true);
+    }
     try {
       const walletParam =
         selectedWalletId !== "ALL" ? `&walletId=${selectedWalletId}` : "&walletId=GLOBAL";
@@ -420,7 +468,11 @@ export default function BudgetsPage() {
 
       const res = await fetch(url, { signal: controller.signal });
       const data = await res.json();
-      setBudgets(data.budgets ?? []);
+      const bList = data.budgets ?? [];
+      setBudgets(bList);
+      if (pageMode === "running" && (!selectedWalletId || selectedWalletId === "ALL")) {
+        setCache("moneydocs_budgets_initial", bList, 30_000);
+      }
       if (data.globalCurrency) setUserCurrency(data.globalCurrency);
     } catch (e) {
       if ((e as Error).name !== "AbortError") throw e;
@@ -430,9 +482,20 @@ export default function BudgetsPage() {
   };
 
   useEffect(() => {
-    fetch("/api/finance/user")
-      .then((r) => r.json())
-      .then((d) => { if (d.user?.baseCurrency) setUserCurrency(d.user.baseCurrency); });
+    // Use sessionStorage cache to avoid redundant user fetch on revisit
+    const cachedUser = getCache<{ baseCurrency: string }>(CACHE_KEYS.USER);
+    if (cachedUser?.baseCurrency) {
+      setUserCurrency(cachedUser.baseCurrency);
+    } else {
+      fetch("/api/finance/user")
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.user?.baseCurrency) {
+            setUserCurrency(d.user.baseCurrency);
+            setCache(CACHE_KEYS.USER, d.user, CACHE_TTL.USER);
+          }
+        });
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -456,7 +519,14 @@ export default function BudgetsPage() {
     return () => observer.disconnect();
   }, [isReordering]);
 
-  const handleOpenAddModal = () => { setEditingBudget(null); setShowAddModal(true); };
+  const handleOpenAddModal = () => {
+    if (!canCreateBudgets) {
+      toast("You do not have permission to create budgets in this wallet.", "error");
+      return;
+    }
+    setEditingBudget(null);
+    setShowAddModal(true);
+  };
 
   const handleStartReorder = () => {
     setShowModeDropdown(false);
@@ -506,14 +576,72 @@ export default function BudgetsPage() {
   const daysInMonth = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10), 0).getDate();
   const daysLeft    = Math.max(0, daysInMonth - now.getDate());
 
-  // â”€â”€ Separate ALL_CATEGORIES budget from the rest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const allCatBudget = budgets.find(
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Separate ALL_CATEGORIES budget from the rest Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // â”€â”€ Dynamic Period Tabs Configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const existingPeriodTypes = Array.from(
+    new Set(budgets.map((b) => (b.periodType || "MONTH") as BudgetPeriodType))
+  );
+  let availablePeriods: BudgetPeriodType[] = ORDERED_PERIODS.filter((p) =>
+    existingPeriodTypes.includes(p)
+  );
+  if (availablePeriods.length === 0) {
+    availablePeriods = ["MONTH"];
+  }
+
+  // Ensure active tab stays in sync with available tabs
+  useEffect(() => {
+    if (availablePeriods.length > 0 && !availablePeriods.includes(activePeriodTab)) {
+      setActivePeriodTab(availablePeriods[0]);
+    }
+  }, [availablePeriods, activePeriodTab]);
+
+  const handleSelectTab = (tab: BudgetPeriodType) => {
+    setActivePeriodTab(tab);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("last_opened_budget_tab", tab);
+      document.cookie = `last_opened_budget_tab=${tab}; path=/; max-age=31536000; SameSite=Lax`;
+    }
+  };
+
+  // â”€â”€ Filter budgets for active tab (running mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const currentTabBudgets = pageMode === "running"
+    ? budgets.filter((b) => (b.periodType || "MONTH") === activePeriodTab)
+    : budgets;
+
+  const allCatBudget = currentTabBudgets.find(
     (b) => b.category === "ALL_CATEGORIES" || b.category === "ALL"
   );
   // Only show non-ALL_CATEGORIES budgets in the card list
-  const cardBudgets = budgets.filter(
+  const cardBudgets = currentTabBudgets.filter(
     (b) => b.category !== "ALL_CATEGORIES" && b.category !== "ALL"
   );
+
+  // â”€â”€ Child budgets exceeding limit check for All Categories card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const specificChildBudgets = cardBudgets.filter(
+    (b) => !b.isOtherCategories && b.category !== "OTHER_CATEGORIES"
+  );
+  const childBudgetsTotal = allCatBudget
+    ? (allCatBudget.childBudgetsTotal ?? specificChildBudgets.reduce((s, b) => s + (b.amountLimit || 0), 0))
+    : 0;
+  const childBudgetsExceed = allCatBudget
+    ? (allCatBudget.childBudgetsExceed ?? childBudgetsTotal > allCatBudget.amountLimit)
+    : false;
+  const childBudgetsExceededAmount = allCatBudget
+    ? (allCatBudget.childBudgetsExceededAmount ?? Math.max(0, childBudgetsTotal - allCatBudget.amountLimit))
+    : 0;
+
+  // â”€â”€ Days left in active period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  let daysLeftInPeriod = daysLeft;
+  if (pageMode === "running") {
+    const refEnd = allCatBudget?.endDate
+      ? new Date(allCatBudget.endDate)
+      : cardBudgets[0]?.endDate
+      ? new Date(cardBudgets[0].endDate)
+      : null;
+    if (refEnd) {
+      daysLeftInPeriod = Math.max(0, Math.ceil((refEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    }
+  }
 
   // â”€â”€ Gauge stats: prefer ALL_CATEGORIES budget; fall back to sum of cards â”€â”€
   const totalBudgetLimit = allCatBudget
@@ -538,7 +666,7 @@ export default function BudgetsPage() {
     return val.toLocaleString();
   };
 
-  // â”€â”€ Finished budgets: group by period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Finished budgets: group by period Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const finishedGroups = pageMode === "finished"
     ? groupFinishedBudgetsByPeriod(budgets)
     : [];
@@ -554,14 +682,14 @@ export default function BudgetsPage() {
 
   return (
     <div className="max-w-lg mx-auto pb-24">
-      {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Header Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <div className="flex items-center justify-between px-5 pt-4 pb-2">
         <h1 className="text-white font-extrabold text-2xl tracking-tight">
           {pageMode === "finished" ? "Finished Budgets" : "Running Budgets"}
         </h1>
         <div className="flex items-center gap-2">
           <WalletSwitcher iconOnly />
-          {/* â”€â”€ Three-dot menu for mode switching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+          {/* Ã¢â€â‚¬Ã¢â€â‚¬ Three-dot menu for mode switching Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
           <div className="relative" ref={modeDropdownRef}>
             <button
               onClick={() => setShowModeDropdown((v) => !v)}
@@ -618,16 +746,37 @@ export default function BudgetsPage() {
         </div>
       </div>
 
-      {/* â”€â”€ Tab row (only for running mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Tab row (only for running mode) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {pageMode === "running" && (
-        <div className="flex items-center px-5 pb-1 border-b border-white/8">
-          <button className="pb-2 text-sm font-bold text-white border-b-2 border-white">
-            This month
-          </button>
+        <div className="flex items-center gap-6 px-5 pb-1 border-b border-white/8 overflow-x-auto no-scrollbar">
+          {availablePeriods.map((period) => {
+            const isActive = activePeriodTab === period;
+            return (
+              <button
+                key={period}
+                type="button"
+                onClick={() => handleSelectTab(period)}
+                className={`pb-2.5 text-sm font-bold transition-all relative whitespace-nowrap cursor-pointer ${
+                  isActive
+                    ? "text-white"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {PERIOD_CONFIG[period]?.label || period}
+                {isActive && (
+                  <motion.div
+                    layoutId="activeBudgetTab"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-white rounded-full"
+                    transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                  />
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* ── Reorder Action Bar (inline) ── */}
+      {/* â”€â”€ Reorder Action Bar (inline) â”€â”€ */}
       {isReordering && pageMode === "running" && (
         <div className="px-5 pt-3">
           <div className="p-3.5 rounded-2xl bg-[#1b1c23] border border-white/10 flex items-center justify-between shadow-xl">
@@ -667,12 +816,12 @@ export default function BudgetsPage() {
               </button>
             </div>
           </div>
-          {/* Sentinel — when this leaves the viewport the floating clone appears */}
+          {/* Sentinel â€” when this leaves the viewport the floating clone appears */}
           <div ref={reorderBarSentinelRef} aria-hidden="true" />
         </div>
       )}
 
-      {/* ── Reorder Action Bar (floating clone, shown when scrolled past inline bar) ── */}
+      {/* â”€â”€ Reorder Action Bar (floating clone, shown when scrolled past inline bar) â”€â”€ */}
       <AnimatePresence>
         {isReordering && pageMode === "running" && isBarFloating && (
           <motion.div
@@ -724,7 +873,7 @@ export default function BudgetsPage() {
         )}
       </AnimatePresence>
 
-      {/* â”€â”€ Content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Content Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {loading ? (
         <div className="space-y-3 px-5 pt-6">
           {[1, 2].map((i) => (
@@ -732,7 +881,7 @@ export default function BudgetsPage() {
           ))}
         </div>
       ) : pageMode === "finished" ? (
-        /* â”€â”€ FINISHED BUDGETS VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* Ã¢â€â‚¬Ã¢â€â‚¬ FINISHED BUDGETS VIEW Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */
         budgets.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center pt-16 pb-12 px-6 space-y-4">
             <CheckCircle2 className="w-16 h-16 text-slate-600" />
@@ -752,7 +901,7 @@ export default function BudgetsPage() {
                   {`${String(group.startDate.getDate()).padStart(2, "0")}/${String(group.startDate.getMonth() + 1).padStart(2, "0")}/${group.startDate.getFullYear()} - ${String(group.endDate.getDate()).padStart(2, "0")}/${String(group.endDate.getMonth() + 1).padStart(2, "0")}/${group.endDate.getFullYear()}`}
                 </p>
 
-                {/* Budget cards for this period â€” ALL_CATEGORIES rendered as flat card */}
+                {/* Budget cards for this period Ã¢â‚¬â€ ALL_CATEGORIES rendered as flat card */}
                 <div className="space-y-3">
                   {group.budgets.map((b) => {
                     const isOver = b.spent > b.amountLimit;
@@ -816,12 +965,12 @@ export default function BudgetsPage() {
             ))}
           </div>
         )
-      ) : budgets.length === 0 ? (
-        /* â”€â”€ RUNNING BUDGETS EMPTY STATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+      ) : currentTabBudgets.length === 0 ? (
+        /* â”€â”€ RUNNING BUDGETS EMPTY STATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
         <div className="flex flex-col items-center justify-center text-center pt-16 pb-12 px-6 space-y-4">
           <EmptyBudgetIllustration />
           <h2 className="text-white text-xl font-extrabold tracking-tight mt-2">
-            You have no budget for {walletLabel}
+            You have no {PERIOD_CONFIG[activePeriodTab]?.label.toLowerCase() || ""} budget for {walletLabel}
           </h2>
           <p className="text-slate-400 text-sm max-w-xs leading-relaxed">
             Start saving money by creating budgets and we will help you stick with it
@@ -840,9 +989,9 @@ export default function BudgetsPage() {
           </div>
         </div>
       ) : (
-        /* â”€â”€ RUNNING BUDGETS VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* Ã¢â€â‚¬Ã¢â€â‚¬ RUNNING BUDGETS VIEW Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */
         <>
-          {/* â”€â”€ Unified All Categories Card (Clickable unity into detail page) â”€â”€ */}
+          {/* Ã¢â€â‚¬Ã¢â€â‚¬ Unified All Categories Card (Clickable unity into detail page) Ã¢â€â‚¬Ã¢â€â‚¬ */}
           {allCatBudget ? (
             <Link
               href={`/budgets/${allCatBudget._id}?monthYear=${monthYear}${
@@ -850,7 +999,7 @@ export default function BudgetsPage() {
               }`}
               className="block mx-5 mt-4 bg-[#141519] border border-white/8 rounded-3xl overflow-hidden cursor-pointer hover:border-white/15 active:scale-[0.99] transition-all"
             >
-              {/* All Categories header row â€” seamless with card, no divider line */}
+              {/* All Categories header row Ã¢â‚¬â€ seamless with card, no divider line */}
               <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
                 <div className="flex items-center gap-3">
                   <AllCategoriesGlobeGraphic size={34} />
@@ -875,10 +1024,20 @@ export default function BudgetsPage() {
                     <p className="text-slate-400 text-[11px] mt-0.5">Total spent</p>
                   </div>
                   <div className="flex-1 text-center px-1">
-                    <p className="text-white font-bold text-sm tracking-tight">{daysLeft} days</p>
-                    <p className="text-slate-400 text-[11px] mt-0.5">End of month</p>
+                    <p className="text-white font-bold text-sm tracking-tight">{daysLeftInPeriod} days</p>
+                    <p className="text-slate-400 text-[11px] mt-0.5">{PERIOD_CONFIG[activePeriodTab]?.endLabel || "End of period"}</p>
                   </div>
                 </div>
+
+                {/* Warning when child budgets exceed All Categories limit */}
+                {childBudgetsExceed && (
+                  <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400 mt-0.5" />
+                    <p className="leading-snug">
+                      <span className="font-semibold text-amber-200">Warning:</span> Total child budgets ({formatK(childBudgetsTotal)}) exceed the All Categories budget limit ({formatK(allCatBudget.amountLimit)}) by {formatK(childBudgetsExceededAmount)}.
+                    </p>
+                  </div>
+                )}
 
                 {/* Create Budget */}
                 <button
@@ -903,7 +1062,7 @@ export default function BudgetsPage() {
               onClick={handleOpenAddModal}
               className="mx-5 mt-4 bg-[#141519] border border-white/8 rounded-3xl overflow-hidden cursor-pointer hover:border-white/15 active:scale-[0.99] transition-all"
             >
-              {/* All Categories header row â€” seamless with card, no divider line */}
+              {/* All Categories header row Ã¢â‚¬â€ seamless with card, no divider line */}
               <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
                 <div className="flex items-center gap-3">
                   <AllCategoriesGlobeGraphic size={34} />
@@ -952,7 +1111,7 @@ export default function BudgetsPage() {
             </div>
           )}
 
-          {/* â”€â”€ Individual budget cards (ALL_CATEGORIES excluded) â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+          {/* Ã¢â€â‚¬Ã¢â€â‚¬ Individual budget cards (ALL_CATEGORIES excluded) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
           {isReordering ? (
             <div className="space-y-3.5">
               <Reorder.Group
@@ -1014,15 +1173,21 @@ export default function BudgetsPage() {
         </>
       )}
 
-      {/* â”€â”€ Add / Edit Budget Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Add / Edit Budget Modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       <AddBudgetModal
         isOpen={showAddModal}
         onClose={() => { setShowAddModal(false); setEditingBudget(null); }}
-        onSuccess={fetchBudgets}
+        onSuccess={async (createdPeriod) => {
+          await fetchBudgets();
+          if (createdPeriod) {
+            handleSelectTab(createdPeriod);
+          }
+        }}
         userCurrency={activeCurrency || userCurrency}
         wallets={wallets}
         initialBudget={editingBudget}
         initialWalletId={selectedWalletId}
+        initialPeriodType={activePeriodTab}
       />
     </div>
   );

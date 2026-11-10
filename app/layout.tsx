@@ -22,11 +22,8 @@ export const metadata: Metadata = {
   },
   description: "Money Docs — Personal finance & debt dashboard",
   icons: {
-    icon: [
-      { url: "/assets/icons/favicon2.png" },
-      { url: "/assets/favicon2.png" },
-    ],
-    shortcut: "/assets/icons/favicon2.png",
+    icon: "/assets/icons/favicon.png",
+    shortcut: "/assets/icons/favicon.png",
     apple: "/assets/icons/favicon2.png",
   },
 };

@@ -9,6 +9,7 @@ import EventModel from "@/models/Event";
 import { getExchangeRates, convertCurrency, convertToIDR } from "@/lib/currency";
 import { isLoanCategory } from "@/lib/categories";
 import { notifyWalletTransactionActivity } from "@/lib/walletNotifications";
+import { getUserWalletPermissions } from "@/lib/walletPermissions";
 
 async function getUserId(): Promise<string | null> {
   const session = await auth();
@@ -33,13 +34,28 @@ export async function GET(
   }
 
   await connectDB();
-  const tx = await Transaction.findOne({ _id: id, userId })
-    .populate({ path: "walletId", select: "name icon currency balance", strictPopulate: false })
+  const tx = await Transaction.findById(id)
+    .populate({ path: "walletId", select: "name icon currency balance sharedWith userId ownerEmail", strictPopulate: false })
     .populate({ path: "eventId", select: "name icon currency status", strictPopulate: false })
     .lean();
 
   if (!tx) {
     return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+  }
+
+  const session = await auth();
+  const userEmail = session?.user?.email?.toLowerCase();
+  const isOwnerOfTx = String((tx as any).userId) === String(userId);
+
+  if (!isOwnerOfTx) {
+    if (!tx.walletId) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
+    const walletObj = typeof tx.walletId === "object" ? tx.walletId : await Wallet.findById(tx.walletId).lean();
+    const perms = getUserWalletPermissions(walletObj as any, userEmail, userId);
+    if (!perms.transactions.read) {
+      return NextResponse.json({ error: "You do not have permission to view this transaction" }, { status: 403 });
+    }
   }
 
   return NextResponse.json({ transaction: tx });
@@ -63,9 +79,24 @@ export async function PATCH(
   }
 
   await connectDB();
-  const oldTx = await Transaction.findOne({ _id: id, userId });
+  const oldTx = await Transaction.findById(id);
   if (!oldTx) {
     return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+  }
+
+  const session = await auth();
+  const userEmail = session?.user?.email?.toLowerCase();
+  const isOwnerOfTx = String(oldTx.userId) === String(userId);
+
+  if (!isOwnerOfTx) {
+    if (!oldTx.walletId) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
+    const oldWallet = await Wallet.findById(oldTx.walletId).lean();
+    const perms = getUserWalletPermissions(oldWallet as any, userEmail, userId);
+    if (!perms.transactions.update) {
+      return NextResponse.json({ error: "You do not have permission to edit this transaction" }, { status: 403 });
+    }
   }
 
   const usdRates = await getExchangeRates("USD");
@@ -212,8 +243,8 @@ export async function PATCH(
       : [];
   }
 
-  const updatedTx = await Transaction.findOneAndUpdate(
-    { _id: id, userId },
+  const updatedTx = await Transaction.findByIdAndUpdate(
+    id,
     { $set: updates },
     { new: true }
   )
@@ -253,9 +284,24 @@ export async function DELETE(
   }
 
   await connectDB();
-  const tx = await Transaction.findOne({ _id: id, userId });
+  const tx = await Transaction.findById(id);
   if (!tx) {
     return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+  }
+
+  const delSession = await auth();
+  const delUserEmail = delSession?.user?.email?.toLowerCase();
+  const isOwnerOfTx = String(tx.userId) === String(userId);
+
+  if (!isOwnerOfTx) {
+    if (!tx.walletId) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
+    const wallet = await Wallet.findById(tx.walletId).lean();
+    const perms = getUserWalletPermissions(wallet as any, delUserEmail, userId);
+    if (!perms.transactions.delete) {
+      return NextResponse.json({ error: "You do not have permission to delete this transaction" }, { status: 403 });
+    }
   }
 
   const usdRates = await getExchangeRates("USD");
@@ -294,7 +340,7 @@ export async function DELETE(
     }
   }
 
-  await Transaction.deleteOne({ _id: id, userId });
+  await Transaction.deleteOne({ _id: id });
 
   // Notify wallet collaborators (fire-and-forget)
   if (tx.walletId) {

@@ -165,13 +165,13 @@ export default function EventModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[90] bg-[#111216] text-white flex flex-col overflow-y-auto">
+        <div className="fixed inset-0 z-[90] bg-[#111216] text-white flex flex-col overflow-y-auto overflow-x-hidden">
           <motion.div
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 28, stiffness: 320 }}
-            className="max-w-lg mx-auto w-full min-h-screen flex flex-col justify-between p-4 pb-8"
+            className="max-w-lg mx-auto w-full min-h-screen flex flex-col justify-between p-4 pb-8 overflow-x-hidden"
           >
             <div>
               {/* Top Bar */}
@@ -213,7 +213,7 @@ export default function EventModal({
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Name"
                     autoFocus
-                    className="flex-1 bg-transparent text-2xl font-normal text-white placeholder-slate-500 outline-none"
+                    className="flex-1 min-w-0 bg-transparent text-2xl font-normal text-white placeholder-slate-500 outline-none"
                   />
                 </div>
 
@@ -284,7 +284,7 @@ export default function EventModal({
                   </button>
 
                   {isCurrencyDropdownOpen && (
-                    <div className="absolute right-0 top-[calc(100%+6px)] z-[95] w-60 max-h-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left">
+                    <div className="absolute right-0 top-[calc(100%+6px)] z-[95] w-60 max-w-[calc(100vw-2rem)] max-h-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left">
                       {SUPPORTED_CURRENCIES.map((code) => {
                         const info = CURRENCY_INFO[code];
                         const isSelected = currency === code;
@@ -350,7 +350,7 @@ export default function EventModal({
                   </button>
 
                   {walletDropdownOpen && (
-                    <div className="absolute right-0 top-[calc(100%+6px)] z-[85] w-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left max-h-64">
+                    <div className="absolute right-0 top-[calc(100%+6px)] z-[85] w-64 max-w-[calc(100vw-2rem)] bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left max-h-64">
                       <button
                         type="button"
                         onClick={(e) => {

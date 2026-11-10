@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
@@ -8,6 +8,7 @@ import Budget from "@/models/Budget";
 import User from "@/models/User";
 import Notification from "@/models/Notification";
 import { createAndSendNotification } from "@/lib/notifications";
+import { getUserWalletPermissions, normalizePermissions } from "@/lib/walletPermissions";
 
 async function getUserInfo(req?: NextRequest): Promise<{ id: string; email: string } | null> {
   const session = await auth();
@@ -27,6 +28,89 @@ export async function GET(req: NextRequest) {
   await connectDB();
   const userObjectId = new mongoose.Types.ObjectId(userInfo.id);
 
+  const { searchParams } = new URL(req.url);
+  const singleId = searchParams.get("id");
+
+  // Single wallet lookup
+  if (singleId && mongoose.Types.ObjectId.isValid(singleId)) {
+    const w = await Wallet.findOne({
+      _id: singleId,
+      $or: [
+        { userId: userObjectId },
+        { sharedWith: { $elemMatch: { email: userInfo.email } } },
+      ],
+    }).lean();
+
+    if (!w) {
+      return NextResponse.json({ error: "Wallet not found or permission denied" }, { status: 404 });
+    }
+
+    const owner = (await User.findById(w.userId)
+      .select("_id email name image profileColor")
+      .lean()) as { _id: mongoose.Types.ObjectId; email: string; name: string; image?: string; profileColor?: string } | null;
+
+    const allMemberEmails = (w.sharedWith || []).map((m) => m.email.toLowerCase());
+    const memberUsers = (await User.find({ email: { $in: allMemberEmails } })
+      .select("email name image profileColor")
+      .lean()) as Array<{ email: string; name: string; image?: string; profileColor?: string }>;
+    const memberUserMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u]));
+
+    const isOwner = w.userId.toString() === userInfo.id;
+    const memberEntry = (w.sharedWith || []).find(
+      (m) => m.email.toLowerCase() === userInfo.email.toLowerCase()
+    );
+
+    const currentUserDoc = (await User.findById(userInfo.id).select("defaultWalletId").lean()) as {
+      defaultWalletId?: mongoose.Types.ObjectId;
+    } | null;
+    const userDefaultWalletIdStr = currentUserDoc?.defaultWalletId
+      ? String(currentUserDoc.defaultWalletId)
+      : null;
+
+    let resolvedIsDefault = false;
+    if (userDefaultWalletIdStr) {
+      resolvedIsDefault = String(w._id) === userDefaultWalletIdStr;
+    } else if (isOwner) {
+      resolvedIsDefault = Boolean(w.isDefault);
+    } else if (memberEntry) {
+      resolvedIsDefault = Boolean(memberEntry.isDefault);
+    }
+
+    const resolvedExcludeFromTotal = isOwner
+      ? Boolean(w.excludeFromTotal)
+      : Boolean(memberEntry?.excludeFromTotal);
+
+    const resolvedEnableNotification = isOwner
+      ? w.enableNotification !== false
+      : memberEntry?.enableNotification !== undefined
+      ? Boolean(memberEntry.enableNotification)
+      : true;
+
+    const resolvedSingleWallet = {
+      ...w,
+      isDefault: resolvedIsDefault,
+      excludeFromTotal: resolvedExcludeFromTotal,
+      enableNotification: resolvedEnableNotification,
+      ownerEmail: owner?.email ?? "",
+      ownerName: owner?.name ?? "",
+      ownerImage: owner?.image ?? "",
+      ownerProfileColor: owner?.profileColor ?? "",
+      sharedWith: (w.sharedWith || []).map((m) => {
+        const u = memberUserMap.get(m.email.toLowerCase());
+        return {
+          ...m,
+          name: m.name || u?.name || "",
+          image: u?.image || m.image || "",
+          profileColor: u?.profileColor || m.profileColor || "",
+          roleName: m.roleName || (m.role === "VIEWER" ? "Viewer" : "Editor"),
+          permissions: normalizePermissions(m.permissions, m.role || m.roleName),
+        };
+      }),
+    };
+
+    return NextResponse.json({ wallet: resolvedSingleWallet, currentUser: { id: userInfo.id, email: userInfo.email } });
+  }
+
   // Return owned wallets + wallets where this user has ACCEPTED the invite
   const walletsRaw = await Wallet.find({
     $or: [
@@ -37,21 +121,31 @@ export async function GET(req: NextRequest) {
     .sort({ isDefault: -1, createdAt: 1 })
     .lean();
 
-  // Attach owner info (email + name) to each wallet
+  // Attach owner info (email + name + image + profileColor) to each wallet
   const ownerIds = [...new Set(walletsRaw.map((w) => w.userId.toString()))];
   const owners = (await User.find({ _id: { $in: ownerIds } })
-    .select("_id email name")
-    .lean()) as Array<{ _id: mongoose.Types.ObjectId; email: string; name: string }>;
-  const ownerMap = new Map(owners.map((o) => [o._id.toString(), { email: o.email, name: o.name }]));
+    .select("_id email name image profileColor")
+    .lean()) as Array<{ _id: mongoose.Types.ObjectId; email: string; name: string; image?: string; profileColor?: string }>;
+  const ownerMap = new Map(
+    owners.map((o) => [
+      o._id.toString(),
+      {
+        email: o.email,
+        name: o.name,
+        image: o.image || "",
+        profileColor: o.profileColor || "",
+      },
+    ])
+  );
 
-  // Also collect all member emails to populate member names
+  // Also collect all member emails to populate member names, images, profileColors
   const allMemberEmails = [
     ...new Set(walletsRaw.flatMap((w) => (w.sharedWith || []).map((m) => m.email.toLowerCase()))),
   ];
   const memberUsers = (await User.find({ email: { $in: allMemberEmails } })
-    .select("email name")
-    .lean()) as Array<{ email: string; name: string }>;
-  const memberNameMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u.name]));
+    .select("email name image profileColor")
+    .lean()) as Array<{ email: string; name: string; image?: string; profileColor?: string }>;
+  const memberUserMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u]));
 
   // Fetch calling user's defaultWalletId and custom walletOrder
   const currentUserDoc = (await User.findById(userInfo.id).select("defaultWalletId walletOrder").lean()) as {
@@ -97,10 +191,19 @@ export async function GET(req: NextRequest) {
       enableNotification: resolvedEnableNotification,
       ownerEmail: ownerMap.get(w.userId.toString())?.email ?? "",
       ownerName: ownerMap.get(w.userId.toString())?.name ?? "",
-      sharedWith: (w.sharedWith || []).map((m) => ({
-        ...m,
-        name: m.name || memberNameMap.get(m.email.toLowerCase()) || "",
-      })),
+      ownerImage: ownerMap.get(w.userId.toString())?.image ?? "",
+      ownerProfileColor: ownerMap.get(w.userId.toString())?.profileColor ?? "",
+      sharedWith: (w.sharedWith || []).map((m) => {
+        const u = memberUserMap.get(m.email.toLowerCase());
+        return {
+          ...m,
+          name: m.name || u?.name || "",
+          image: u?.image || m.image || "",
+          profileColor: u?.profileColor || m.profileColor || "",
+          roleName: m.roleName || (m.role === "VIEWER" ? "Viewer" : "Editor"),
+          permissions: normalizePermissions(m.permissions, m.role || m.roleName),
+        };
+      }),
     };
   });
 
@@ -119,7 +222,10 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ wallets });
+  const walletsRes = NextResponse.json({ wallets, currentUser: { id: userInfo.id, email: userInfo.email } });
+  // Wallet data is per-user; cache for 10 s, serve stale for 20 s while revalidating
+  walletsRes.headers.set("Cache-Control", "private, max-age=10, stale-while-revalidate=20");
+  return walletsRes;
 }
 
 export async function POST(req: NextRequest) {
@@ -167,7 +273,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ wallet }, { status: 201 });
 }
 
-/** PATCH /api/finance/wallets — Update wallet (balance, default, sharing, metadata) */
+/** PATCH /api/finance/wallets â€” Update wallet (balance, default, sharing, permissions, metadata) */
 export async function PATCH(req: NextRequest) {
   const userInfo = await getUserInfo(req);
   if (!userInfo) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -189,6 +295,10 @@ export async function PATCH(req: NextRequest) {
     shareEmail,
     removeShareEmail,
     leaveWallet,
+    updateMemberEmail,
+    roleName,
+    role,
+    permissions,
   } = body;
 
   if (!id || typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
@@ -211,8 +321,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   const isOwner = wallet.userId.toString() === userInfo.id;
+  const callerPerms = getUserWalletPermissions(wallet, userInfo.email, userInfo.id);
 
-  // ── Leave wallet (member action) ──────────────────────────────────────────
+  // â”€â”€ Leave wallet (member action) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (leaveWallet) {
     if (isOwner) {
       return NextResponse.json(
@@ -250,12 +361,47 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: true, left: true, walletId: id });
   }
 
-  // For other updates, non-owners must be ACCEPTED with EDITOR or ADMIN role
+  // â”€â”€ Update Member Role & Permissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  if (updateMemberEmail && typeof updateMemberEmail === "string") {
+    if (!isOwner && !callerPerms.manageMembers) {
+      return NextResponse.json(
+        { error: "Only wallet owners or managers can edit member permissions" },
+        { status: 403 }
+      );
+    }
+    const cleanTargetEmail = updateMemberEmail.trim().toLowerCase();
+    const existingMember = (wallet.sharedWith || []).find(
+      (m) => m.email.toLowerCase() === cleanTargetEmail
+    );
+    if (!existingMember) {
+      return NextResponse.json({ error: "Member not found in this wallet" }, { status: 404 });
+    }
+
+    const updatedRole = role || existingMember.role || "EDITOR";
+    const updatedRoleName =
+      roleName && typeof roleName === "string" && roleName.trim()
+        ? roleName.trim().slice(0, 30)
+        : existingMember.roleName || (updatedRole === "VIEWER" ? "Viewer" : "Editor");
+    const updatedPermissions = normalizePermissions(permissions, updatedRole);
+
+    await Wallet.updateOne(
+      { _id: id, "sharedWith.email": cleanTargetEmail },
+      {
+        $set: {
+          "sharedWith.$.role": updatedRole,
+          "sharedWith.$.roleName": updatedRoleName,
+          "sharedWith.$.permissions": updatedPermissions,
+        },
+      }
+    );
+  }
+
+  // For other updates, non-owners must be ACCEPTED members
   if (!isOwner) {
     const memberEntry = wallet.sharedWith?.find(
       (m) => m.email.toLowerCase() === userInfo.email.toLowerCase()
     );
-    if (!memberEntry || memberEntry.status !== "ACCEPTED" || !["EDITOR", "ADMIN"].includes(memberEntry.role)) {
+    if (!memberEntry || memberEntry.status !== "ACCEPTED") {
       return NextResponse.json({ error: "Permission denied" }, { status: 403 });
     }
   }
@@ -294,6 +440,13 @@ export async function PATCH(req: NextRequest) {
 
   // Adjust Balance
   if (balance !== undefined) {
+    if (!isOwner && !callerPerms.editBalance) {
+      return NextResponse.json(
+        { error: "You do not have permission to edit the balance of this wallet" },
+        { status: 403 }
+      );
+    }
+
     const num = Number(balance);
     if (!isNaN(num) && isFinite(num) && Math.abs(num) < 1e14) {
       const oldBalance = wallet.balance || 0;
@@ -329,6 +482,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (excludeFromReport !== undefined) {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.excludeFromReport = Boolean(excludeFromReport);
   }
 
@@ -344,6 +500,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (archived !== undefined) {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.archived = Boolean(archived);
   }
 
@@ -359,25 +518,37 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (disabledCategories !== undefined && Array.isArray(disabledCategories)) {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.disabledCategories = disabledCategories.map((c) => String(c).trim());
   }
 
   if (name && typeof name === "string") {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.name = name.trim().slice(0, 50).replace(/[<>]/g, "");
   }
 
   if (icon && typeof icon === "string") {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.icon = icon.slice(0, 10);
   }
 
   if (currency && typeof currency === "string") {
+    if (!isOwner && !callerPerms.editWallet) {
+      return NextResponse.json({ error: "Permission denied to edit wallet settings" }, { status: 403 });
+    }
     updateFields.currency = currency.slice(0, 5).toUpperCase();
   }
 
-  // ── Invite a new member ────────────────────────────────────────────────────
+  // â”€â”€ Invite a new member â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (shareEmail && typeof shareEmail === "string") {
-    if (!isOwner) {
-      return NextResponse.json({ error: "Only the wallet owner can invite members." }, { status: 403 });
+    if (!isOwner && !callerPerms.inviteMember) {
+      return NextResponse.json({ error: "You do not have permission to invite members." }, { status: 403 });
     }
 
     const cleanInput = shareEmail.trim();
@@ -395,8 +566,8 @@ export async function PATCH(req: NextRequest) {
         { name: { $regex: new RegExp(`^${escaped}$`, "i") } },
       ],
     })
-      .select("_id email name")
-      .lean()) as { _id: mongoose.Types.ObjectId; email: string; name: string } | null;
+      .select("_id email name image profileColor")
+      .lean()) as { _id: mongoose.Types.ObjectId; email: string; name: string; image?: string; profileColor?: string } | null;
 
     if (!invitedUser) {
       return NextResponse.json({ error: "User does not exist" }, { status: 404 });
@@ -431,7 +602,7 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    // Add as PENDING
+    // Add as PENDING with default Editor permissions
     await Wallet.findByIdAndUpdate(id, {
       $pull: { sharedWith: { email: cleanEmail } },
     });
@@ -441,6 +612,8 @@ export async function PATCH(req: NextRequest) {
           email: cleanEmail,
           name: invitedUser.name || "",
           role: "EDITOR",
+          roleName: "Editor",
+          permissions: normalizePermissions(null, "EDITOR"),
           status: "PENDING",
           addedAt: new Date(),
         },
@@ -470,10 +643,10 @@ export async function PATCH(req: NextRequest) {
     });
   }
 
-  // ── Remove a member or cancel invitation ──────────────────────────────────
+  // â”€â”€ Remove a member or cancel invitation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (removeShareEmail && typeof removeShareEmail === "string") {
-    if (!isOwner) {
-      return NextResponse.json({ error: "Only the wallet owner can remove members." }, { status: 403 });
+    if (!isOwner && !callerPerms.manageMembers) {
+      return NextResponse.json({ error: "You do not have permission to remove members." }, { status: 403 });
     }
     const cleanRemoveEmail = removeShareEmail.trim().toLowerCase();
     await Wallet.findByIdAndUpdate(id, {
@@ -502,16 +675,18 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
   }
 
-  const owner = (await User.findById(updatedWalletRaw.userId).select("email name").lean()) as {
+  const owner = (await User.findById(updatedWalletRaw.userId).select("email name image profileColor").lean()) as {
     email?: string;
     name?: string;
+    image?: string;
+    profileColor?: string;
   } | null;
 
   const memberEmails = (updatedWalletRaw.sharedWith || []).map((m) => m.email.toLowerCase());
   const memberUsers = (await User.find({ email: { $in: memberEmails } })
-    .select("email name")
-    .lean()) as Array<{ email: string; name: string }>;
-  const memberNameMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u.name]));
+    .select("email name image profileColor")
+    .lean()) as Array<{ email: string; name: string; image?: string; profileColor?: string }>;
+  const memberUserMap = new Map(memberUsers.map((u) => [u.email.toLowerCase(), u]));
 
   const currentUserDoc = (await User.findById(userInfo.id).select("defaultWalletId").lean()) as {
     defaultWalletId?: mongoose.Types.ObjectId;
@@ -551,16 +726,25 @@ export async function PATCH(req: NextRequest) {
     enableNotification: resolvedNotification,
     ownerEmail: owner?.email ?? "",
     ownerName: owner?.name ?? "",
-    sharedWith: (updatedWalletRaw.sharedWith || []).map((m) => ({
-      ...m,
-      name: m.name || memberNameMap.get(m.email.toLowerCase()) || "",
-    })),
+    ownerImage: owner?.image ?? "",
+    ownerProfileColor: owner?.profileColor ?? "",
+    sharedWith: (updatedWalletRaw.sharedWith || []).map((m) => {
+      const u = memberUserMap.get(m.email.toLowerCase());
+      return {
+        ...m,
+        name: m.name || u?.name || "",
+        image: u?.image || m.image || "",
+        profileColor: u?.profileColor || m.profileColor || "",
+        roleName: m.roleName || (m.role === "VIEWER" ? "Viewer" : "Editor"),
+        permissions: normalizePermissions(m.permissions, m.role || m.roleName),
+      };
+    }),
   };
 
   return NextResponse.json({ ok: true, wallet: updatedWallet });
 }
 
-/** DELETE /api/finance/wallets?id=<walletId> — Cascade delete wallet and all its transactions & budgets */
+/** DELETE /api/finance/wallets?id=<walletId> â€” Cascade delete wallet and all its transactions & budgets */
 export async function DELETE(req: NextRequest) {
   const userInfo = await getUserInfo(req);
   if (!userInfo) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

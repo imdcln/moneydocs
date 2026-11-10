@@ -24,6 +24,7 @@ import Wallet from "@/models/Wallet";
 import Transaction from "@/models/Transaction";
 import { createAndSendNotification } from "@/lib/notifications";
 import { getExchangeRates, convertCurrency } from "@/lib/currency";
+import { getCategoryDisplayName } from "@/lib/categories";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -101,7 +102,8 @@ async function sendRecapToUser(
   }
 
   // Find top expense category
-  const topCategory = Object.entries(categoryCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const topCategoryKey = Object.entries(categoryCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const topCategoryLabel = topCategoryKey ? getCategoryDisplayName(topCategoryKey) : null;
 
   const formatAmount = (n: number) =>
     `${baseCurrency} ${Math.round(n).toLocaleString()}`;
@@ -112,7 +114,7 @@ async function sendRecapToUser(
   const parts: string[] = [];
   if (totalExpense > 0) {
     parts.push(
-      `You spent ${formatAmount(totalExpense)} across ${expenseCount} expense${expenseCount !== 1 ? "s" : ""}${topCategory ? ` · Top: ${topCategory}` : ""}.`
+      `You spent ${formatAmount(totalExpense)} across ${expenseCount} expense${expenseCount !== 1 ? "s" : ""}${topCategoryLabel ? ` · Top: ${topCategoryLabel}` : ""}.`
     );
   }
   if (totalIncome > 0) {

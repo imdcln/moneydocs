@@ -2,18 +2,32 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Wallet, Plus, Layers, User } from "lucide-react";
+import { Home, Wallet, Plus, Layers, User, Lock } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAdminModal } from "@/hooks/useAdminModal";
+import { useWalletContext } from "@/hooks/useWalletContext";
+import { useToast } from "@/components/ui/Toast";
 
 export default function BottomNav() {
   const pathname = usePathname();
   const { openModal } = useAdminModal();
+  const { activeWalletPermissions, selectedWalletId } = useWalletContext();
+  const { toast } = useToast();
 
   const isHome = pathname === "/";
   const isTransactions = pathname === "/transactions";
   const isBudgets = pathname.startsWith("/budgets");
   const isAccount = pathname.startsWith("/account");
+
+  const canCreate = activeWalletPermissions.transactions.create;
+
+  const handleFabClick = () => {
+    if (!canCreate) {
+      toast("You do not have permission to add transactions to this wallet", "error");
+      return;
+    }
+    openModal();
+  };
 
   // Hide BottomNav on transaction and budget detail/transactions subpages
   if (
@@ -68,15 +82,31 @@ export default function BottomNav() {
           <motion.button
             whileTap={{ scale: 0.9 }}
             whileHover={{ scale: 1.05 }}
-            onClick={openModal}
-            className="w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 border-[#0c0d10] active:scale-95 transition-all cursor-pointer"
+            onClick={handleFabClick}
+            className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 border-[#0c0d10] active:scale-95 transition-all cursor-pointer relative ${
+              !canCreate ? "opacity-85" : ""
+            }`}
             style={{
-              backgroundColor: "var(--color-primary)",
-              boxShadow: "0 10px 25px -4px var(--color-primary-glow)",
+              backgroundColor: canCreate ? "var(--color-primary)" : "#222530",
+              boxShadow: canCreate
+                ? "0 10px 25px -4px var(--color-primary-glow)"
+                : "0 6px 18px -4px rgba(0, 0, 0, 0.6)",
             }}
-            aria-label="Add transaction"
+            aria-label={canCreate ? "Add transaction" : "Transaction creation locked"}
+            title={canCreate ? "Add transaction" : "Creation locked for this wallet"}
           >
-            <Plus className="w-7 h-7 text-white stroke-[2.5]" />
+            {canCreate ? (
+              <Plus className="w-7 h-7 text-white stroke-[2.5]" />
+            ) : (
+              <div className="relative flex items-center justify-center">
+                <Plus className="w-6 h-6 text-slate-500 stroke-[2] opacity-40" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-7 h-7 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shadow-md">
+                    <Lock className="w-3.5 h-3.5 text-amber-400 stroke-[2.5]" />
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.button>
         </div>
 

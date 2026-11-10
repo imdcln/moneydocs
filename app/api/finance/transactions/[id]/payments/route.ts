@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import Transaction, { IDebtPayment } from "@/models/Transaction";
+import { getUserWalletPermissions } from "@/lib/walletPermissions";
 import Wallet from "@/models/Wallet";
 import User from "@/models/User";
 import { getExchangeRates, convertCurrency, convertToIDR } from "@/lib/currency";
@@ -50,14 +51,32 @@ export async function POST(
   }
 
   await connectDB();
-  const tx = await Transaction.findOne({ _id: id, userId });
+  const session = await auth();
+  const userEmail = session?.user?.email?.toLowerCase();
+
+  const tx = await Transaction.findById(id);
   if (!tx) {
     return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
   }
 
-  const wallet = await Wallet.findOne({ _id: walletId, userId });
+  if (String(tx.userId) !== String(userId) && tx.walletId) {
+    const txWallet = await Wallet.findById(tx.walletId).lean();
+    const perms = getUserWalletPermissions(txWallet as any, userEmail, userId);
+    if (!perms.transactions.update) {
+      return NextResponse.json({ error: "You do not have permission to record payments for this debt" }, { status: 403 });
+    }
+  }
+
+  const wallet = await Wallet.findById(walletId);
   if (!wallet) {
     return NextResponse.json({ error: "Selected wallet was not found" }, { status: 404 });
+  }
+
+  if (String(wallet.userId) !== String(userId)) {
+    const payWalletPerms = getUserWalletPermissions(wallet as any, userEmail, userId);
+    if (!payWalletPerms.transactions.create && !payWalletPerms.editBalance) {
+      return NextResponse.json({ error: "You do not have permission to pay from this wallet" }, { status: 403 });
+    }
   }
 
   const currentRepaid = Number(tx.debtRepaidAmount) || 0;

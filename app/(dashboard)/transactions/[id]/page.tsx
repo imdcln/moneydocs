@@ -23,6 +23,7 @@ import {
   CreditCard,
   HandCoins,
   Sparkles,
+  Lock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -41,7 +42,9 @@ import {
   isDebtCategory,
 } from "@/lib/categories";
 import { useToast } from "@/components/ui/Toast";
+import { useWalletContext } from "@/hooks/useWalletContext";
 import CategoryPickerModal from "@/components/admin/CategoryPickerModal";
+import { useKeyboardOffset } from "@/hooks/useKeyboardOffset";
 import CustomKeypad, { safeEvaluateMath } from "@/components/admin/CustomKeypad";
 import CurrencyFlag from "@/components/admin/CurrencyFlag";
 import { CalendarIcon, CustomDatePicker } from "@/components/ui/AppIcons";
@@ -109,11 +112,19 @@ export default function TransactionDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { getPermissionsForWallet } = useWalletContext();
 
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const txWalletId = transaction?.walletId?._id;
+  const txPermissions = getPermissionsForWallet(txWalletId);
+  const canReadTx = !txWalletId || txPermissions.transactions.read;
+  const canUpdateTx = !txWalletId || txPermissions.transactions.update;
+  const canDeleteTx = !txWalletId || txPermissions.transactions.delete;
+  const canCreateTx = !txWalletId || txPermissions.transactions.create;
 
   // ── Popups / Overlay states ────────────────────────────────────────────────
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -152,28 +163,6 @@ export default function TransactionDetailPage({
 
   const [rates, setRates] = useState<Record<string, number>>({});
 
-  interface UnpaidDebtItem {
-    _id: string;
-    title: string;
-    category: string;
-    subCategory?: string;
-    amount: number;
-    debtRepaidAmount: number;
-    remainingUnpaid: number;
-    currency: string;
-    date: string;
-    debtDueDate?: string | null;
-    debtParty?: string | null;
-    debtStatus: string;
-    isLoan: boolean;
-    walletName?: string;
-  }
-
-  // Unpaid Debts & Loans list state
-  const [unpaidDebts, setUnpaidDebts] = useState<UnpaidDebtItem[]>([]);
-  const [loadingUnpaidDebts, setLoadingUnpaidDebts] = useState(false);
-  const [isUnpaidListOpen, setIsUnpaidListOpen] = useState(true);
-
   // Full Edit popup state (Picture 3)
   const [editWalletId, setEditWalletId] = useState("");
   const [editCurrency, setEditCurrency] = useState("IDR");
@@ -196,6 +185,10 @@ export default function TransactionDetailPage({
   const [editCategoryPickerOpen, setEditCategoryPickerOpen] = useState(false);
   const [editWalletDropdownOpen, setEditWalletDropdownOpen] = useState(false);
   const editWalletDropdownRef = useRef<HTMLDivElement>(null);
+  const keyboardHeight = useKeyboardOffset();
+  const [isEditScrolledDown, setIsEditScrolledDown] = useState(false);
+  const editScrollContainerRef = useRef<HTMLDivElement>(null);
+  const editFocusScrollTopRef = useRef(0);
   const [editIsKeypadOpen, setEditIsKeypadOpen] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [navigatingToEvents, setNavigatingToEvents] = useState(false);
@@ -256,23 +249,6 @@ export default function TransactionDetailPage({
     }
   };
 
-  const fetchUnpaidDebts = async () => {
-    try {
-      setLoadingUnpaidDebts(true);
-      const res = await fetch("/api/finance/transactions/unpaid-debts");
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.unpaidDebts)) {
-          setUnpaidDebts(data.unpaidDebts);
-        }
-      }
-    } catch {
-      // non-blocking
-    } finally {
-      setLoadingUnpaidDebts(false);
-    }
-  };
-
   const fetchDescriptions = async () => {
     try {
       const res = await fetch("/api/finance/transactions/descriptions");
@@ -289,7 +265,6 @@ export default function TransactionDetailPage({
 
   useEffect(() => {
     fetchTransactionAndWallets();
-    fetchUnpaidDebts();
     fetchDescriptions();
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -370,6 +345,24 @@ export default function TransactionDetailPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [isAmountModalOpen]);
 
+  const handleEditAmountEnter = () => {
+    if (/[+×÷*/-]/.test(editRawAmount)) {
+      setEditRawAmount(safeEvaluateMath(editRawAmount));
+    }
+    setEditIsKeypadOpen(false);
+  };
+
+  const handleEditScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const currentScrollTop = e.currentTarget.scrollTop;
+    if (isEditDescFocused) {
+      if (currentScrollTop - editFocusScrollTopRef.current > 30) {
+        setIsEditScrolledDown(true);
+      } else if (currentScrollTop - editFocusScrollTopRef.current <= 10) {
+        setIsEditScrolledDown(false);
+      }
+    }
+  };
+
   // ── Keyboard listener for Full Edit Modal Keypad ───────────────────────────
   useEffect(() => {
     if (!editIsKeypadOpen) return;
@@ -389,7 +382,7 @@ export default function TransactionDetailPage({
       }
       if (e.key === "Enter") {
         e.preventDefault();
-        handleSaveFullEdit();
+        handleEditAmountEnter();
         return;
       }
       if (/^[0-9]$/.test(e.key)) {
@@ -839,7 +832,6 @@ export default function TransactionDetailPage({
         setTransaction(data.transaction);
         toast("Transaction updated", "success");
         setIsEditModalOpen(false);
-        fetchUnpaidDebts();
         fetchDescriptions();
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("transaction-added"));
@@ -978,6 +970,26 @@ export default function TransactionDetailPage({
     );
   }
 
+  if (transaction && !canReadTx) {
+    return (
+      <div className="py-20 text-white p-6 flex flex-col items-center justify-center text-center max-w-sm mx-auto">
+        <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-4">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold mb-2">Access Restricted</h2>
+        <p className="text-sm text-slate-400 mb-6">
+          You do not have permission to view this transaction.
+        </p>
+        <button
+          onClick={() => router.push("/transactions")}
+          className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-sm font-semibold transition-colors"
+        >
+          Back to transactions
+        </button>
+      </div>
+    );
+  }
+
   const filteredEditDescriptions = editDescription.trim()
     ? allDescriptions.filter((d) =>
         d.toLowerCase().includes(editDescription.trim().toLowerCase())
@@ -1013,13 +1025,15 @@ export default function TransactionDetailPage({
 
           <div className="flex items-center gap-4">
             {/* 1. Duplicate button */}
-            <button
-              onClick={() => setIsDuplicateOpen(true)}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/5 transition-colors"
-              title="Duplicate transaction"
-            >
-              <Copy className="w-5 h-5" />
-            </button>
+            {canCreateTx && (
+              <button
+                onClick={() => setIsDuplicateOpen(true)}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/5 transition-colors"
+                title="Duplicate transaction"
+              >
+                <Copy className="w-5 h-5" />
+              </button>
+            )}
 
             {/* 2. Share button (ignored per user request) */}
             <button
@@ -1031,22 +1045,26 @@ export default function TransactionDetailPage({
             </button>
 
             {/* 3. Edit button -> opens Edit overlay (Picture 3) */}
-            <button
-              onClick={openEditModal}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/5 transition-colors"
-              title="Edit transaction"
-            >
-              <Edit3 className="w-5 h-5" />
-            </button>
+            {canUpdateTx && (
+              <button
+                onClick={openEditModal}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/5 transition-colors"
+                title="Edit transaction"
+              >
+                <Edit3 className="w-5 h-5" />
+              </button>
+            )}
 
             {/* 4. Delete button with popup confirmation */}
-            <button
-              onClick={() => setIsDeleteOpen(true)}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-red-400 hover:bg-white/5 transition-colors"
-              title="Delete transaction"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
+            {canDeleteTx && (
+              <button
+                onClick={() => setIsDeleteOpen(true)}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-red-400 hover:bg-white/5 transition-colors"
+                title="Delete transaction"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1093,7 +1111,7 @@ export default function TransactionDetailPage({
                           Choose Category
                         </button>
                       )}
-                      {hasWalletIssue && (
+                      {hasWalletIssue && canUpdateTx && (
                         <button
                           type="button"
                           onClick={openEditModal}
@@ -1108,8 +1126,8 @@ export default function TransactionDetailPage({
 
                 {/* Row 1: Category — clickable -> opens category popup */}
                 <div
-                  onClick={() => setIsCategoryModalOpen(true)}
-                  className="flex items-center gap-4 py-2 cursor-pointer group hover:opacity-90 transition-opacity"
+                  onClick={canUpdateTx ? () => setIsCategoryModalOpen(true) : undefined}
+                  className={`flex items-center gap-4 py-2 ${canUpdateTx ? "cursor-pointer group hover:opacity-90 transition-opacity" : "cursor-default"}`}
                 >
                   <div className="w-12 h-12 rounded-full flex items-center justify-center bg-[#1d1f27] border border-white/5 flex-shrink-0 group-hover:border-[var(--color-primary)]/40 transition-colors">
                     <CategoryIcon
@@ -1145,7 +1163,7 @@ export default function TransactionDetailPage({
                 </div>
 
                 {/* Row 2: Amount — clickable -> opens amount popup with autofocus */}
-                <div onClick={openAmountModal} className="py-1 cursor-pointer group">
+                <div onClick={canUpdateTx ? openAmountModal : undefined} className={`py-1 ${canUpdateTx ? "cursor-pointer group" : "cursor-default"}`}>
                   <div
                     className={`text-2xl font-normal tracking-tight group-hover:opacity-80 transition-opacity flex items-center gap-3 flex-wrap ${
                       isFullyPaid
@@ -1176,8 +1194,8 @@ export default function TransactionDetailPage({
 
                 {/* Row 3: Date — clickable -> popup calendar select */}
                 <div
-                  onClick={() => setIsDatePickerOpen(true)}
-                  className="flex items-center gap-4 py-2 cursor-pointer group hover:opacity-80 transition-opacity"
+                  onClick={canUpdateTx ? () => setIsDatePickerOpen(true) : undefined}
+                  className={`flex items-center gap-4 py-2 ${canUpdateTx ? "cursor-pointer group hover:opacity-80 transition-opacity" : "cursor-default"}`}
                 >
                   <div className="w-7 h-7 flex items-center justify-center text-slate-300">
                     <CalendarIcon size={20} color="#cbd5e1" />
@@ -1329,6 +1347,7 @@ export default function TransactionDetailPage({
               </div>
 
               {/* Action Button: "Pay Debt" or "Return Money" */}
+              {canUpdateTx && (
               <button
                 type="button"
                 onClick={openPaymentModal}
@@ -1352,6 +1371,7 @@ export default function TransactionDetailPage({
                   </>
                 )}
               </button>
+              )}
             </div>
           )}
 
@@ -1428,164 +1448,6 @@ export default function TransactionDetailPage({
             </div>
           )}
 
-          {/* ── Unpaid Debt & Loan Returns Section (EVERY unpaid is shown regardless of date) ── */}
-          <div className="pt-2 pb-6 space-y-3 border-t border-white/6">
-            <div
-              onClick={() => setIsUnpaidListOpen((prev) => !prev)}
-              className="flex items-center justify-between cursor-pointer select-none py-1 group"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
-                  <CreditCard className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-white text-sm font-bold">Unpaid Debts & Loans</h3>
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      {unpaidDebts.length}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    {unpaidDebts.length === 0
-                      ? "No outstanding debts or loans"
-                      : `${unpaidDebts.length} pending ${unpaidDebts.length === 1 ? "obligation" : "obligations"}`}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 group-hover:text-white transition-colors"
-                aria-label="Toggle unpaid list"
-              >
-                <ChevronDown
-                  className={`w-4 h-4 transition-transform duration-200 ${
-                    isUnpaidListOpen ? "rotate-180" : ""
-                  }`}
-                />
-              </button>
-            </div>
-
-            {isUnpaidListOpen && (
-              <div className="space-y-2 pt-1 animate-fade-in">
-                {loadingUnpaidDebts ? (
-                  <div className="p-4 rounded-2xl bg-[#141519] border border-white/6 text-center text-xs text-slate-500 animate-pulse">
-                    Loading unpaid items...
-                  </div>
-                ) : unpaidDebts.length === 0 ? (
-                  <div className="p-4 rounded-2xl bg-[#141519] border border-white/6 text-center text-xs text-slate-500">
-                    All debts and loan returns are fully settled!
-                  </div>
-                ) : (
-                  unpaidDebts.map((item) => {
-                    const isCurrent = item._id === id;
-                    const itemDate = new Date(item.date);
-                    const formattedDate = itemDate.toLocaleDateString("en-US", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    });
-                    const dueDateFormatted = item.debtDueDate
-                      ? new Date(item.debtDueDate).toLocaleDateString("en-US", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })
-                      : null;
-
-                    return (
-                      <div
-                        key={item._id}
-                        onClick={() => {
-                          if (!isCurrent) {
-                            router.push(`/transactions/${item._id}`);
-                          }
-                        }}
-                        className={`p-3.5 bg-[#16171d] border rounded-2xl flex items-center justify-between gap-3 transition-all ${
-                          isCurrent
-                            ? "border-[var(--color-primary-border)] bg-[var(--color-primary-subtle)]/30 ring-1 ring-[var(--color-primary-border)]"
-                            : "border-white/6 hover:border-white/15 hover:bg-[#1a1c24] cursor-pointer active:scale-[0.99]"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="relative flex-shrink-0">
-                            <CategoryIcon
-                              categoryId={item.category}
-                              subCategoryId={item.subCategory}
-                              size="sm"
-                            />
-                            <span
-                              className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold text-white shadow-sm ${
-                                item.isLoan ? "bg-amber-500" : "bg-red-500"
-                              }`}
-                              title={item.isLoan ? "Loan Return" : "Debt"}
-                            >
-                              {item.isLoan ? "L" : "D"}
-                            </span>
-                          </div>
-
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-white text-xs font-semibold truncate">
-                                {item.title || getCategoryDisplayName(item.category, item.subCategory)}
-                              </p>
-                              <span
-                                className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
-                                  item.isLoan
-                                    ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
-                                    : "bg-red-500/15 text-red-300 border-red-500/30"
-                                }`}
-                              >
-                                {item.isLoan ? "Loan Return" : "Debt"}
-                              </span>
-                              {isCurrent && (
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] border border-[var(--color-primary-border)]">
-                                  Current
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
-                              {item.debtParty && (
-                                <>
-                                  <span className="text-slate-300 font-medium">{item.debtParty}</span>
-                                  <span>•</span>
-                                </>
-                              )}
-                              <span>Date: {formattedDate}</span>
-                              {dueDateFormatted && (
-                                <>
-                                  <span>•</span>
-                                  <span className="text-amber-400/90 font-medium">
-                                    Due: {dueDateFormatted}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 flex-shrink-0 text-right">
-                          <div>
-                            <div
-                              className={`text-xs font-extrabold ${
-                                item.isLoan ? "text-amber-400" : "text-red-400"
-                              }`}
-                            >
-                              {formatMoney(item.remainingUnpaid, item.currency)}
-                            </div>
-                            <p className="text-[10px] text-slate-500 font-medium">remaining</p>
-                          </div>
-                          {!isCurrent && (
-                            <ChevronRight className="w-4 h-4 text-slate-500" />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -1679,7 +1541,7 @@ export default function TransactionDetailPage({
       {/* ── Full Edit Transaction Modal (Picture 3 Overlay) ────────────────── */}
       <AnimatePresence>
         {isEditModalOpen && (
-          <div className="fixed inset-0 z-[80] bg-[#111216] text-white overflow-y-auto">
+          <div ref={editScrollContainerRef} onScroll={handleEditScroll} className="fixed inset-0 z-[80] bg-[#111216] text-white overflow-y-auto">
             <motion.div
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
@@ -1831,13 +1693,25 @@ export default function TransactionDetailPage({
                       <input
                         type="text"
                         value={editDescription}
+                        enterKeyHint="done"
                         onChange={(e) => setEditDescription(e.target.value)}
                         onFocus={() => {
                           setEditIsKeypadOpen(false);
                           setIsEditDescFocused(true);
+                          setIsEditScrolledDown(false);
+                          editFocusScrollTopRef.current = editScrollContainerRef.current?.scrollTop || 0;
                         }}
                         onBlur={() => {
-                          setTimeout(() => setIsEditDescFocused(false), 200);
+                          setTimeout(() => {
+                            setIsEditDescFocused(false);
+                            setIsEditScrolledDown(false);
+                          }, 200);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            (e.target as HTMLInputElement).blur();
+                          }
                         }}
                         placeholder="Write description"
                         className="flex-1 bg-transparent text-slate-200 text-sm outline-none placeholder-slate-500"
@@ -2046,8 +1920,41 @@ export default function TransactionDetailPage({
                 </div>
               </div>
 
-              {/* Bottom Green Save Button */}
-              <div className="px-5 pt-6">
+                            {/* Floating Save Footer for Edit Transaction */}
+              <AnimatePresence>
+                {isEditDescFocused && !isEditScrolledDown && (
+                  <motion.div
+                    key="edit-floating-save-bar"
+                    initial={{ opacity: 0, y: 25, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 15, scale: 0.95 }}
+                    transition={{ type: "spring", damping: 26, stiffness: 360 }}
+                    style={{
+                      bottom: keyboardHeight > 0 ? `${keyboardHeight + 12}px` : "16px",
+                    }}
+                    className="fixed left-4 right-4 max-w-lg mx-auto z-[85] bg-[#1a1c24]/95 backdrop-blur-xl border border-white/12 shadow-[0_16px_40px_rgba(0,0,0,0.65)] rounded-2xl p-2.5 flex items-center gap-2.5"
+                  >
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleSaveFullEdit}
+                      disabled={savingEdit}
+                      className="w-full py-3.5 px-4 rounded-xl bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                      style={{ boxShadow: "0 4px 14px var(--color-primary-glow)" }}
+                    >
+                      <Check className="w-4 h-4 stroke-[2.5]" />
+                      <span>{savingEdit ? "Saving…" : "Save"}</span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Bottom Green Save Button — sticks back when scrolled */}
+              <div
+                className={`px-5 pt-6 transition-opacity duration-200 ${
+                  isEditDescFocused && !isEditScrolledDown ? "opacity-0 pointer-events-none" : "opacity-100"
+                }`}
+              >
                 <button
                   type="button"
                   onClick={handleSaveFullEdit}
@@ -2167,13 +2074,19 @@ export default function TransactionDetailPage({
                       <CustomKeypad
                         value={editRawAmount}
                         onChange={(val) => setEditRawAmount(val)}
-                        onSubmit={handleSaveFullEdit}
+                        onSubmit={handleEditAmountEnter}
                         showQuickChips={true}
                       />
                       <div className="flex items-center gap-3 px-2 pt-3 pb-5 border-t border-white/8 mt-2">
                         <button
                           type="button"
-                          onClick={handleSaveFullEdit}
+                          onClick={() => {
+                            if (/[+×÷*/-]/.test(editRawAmount)) {
+                              setEditRawAmount(safeEvaluateMath(editRawAmount));
+                            }
+                            setEditIsKeypadOpen(false);
+                            handleSaveFullEdit();
+                          }}
                           disabled={savingEdit}
                           className="flex-1 py-3.5 rounded-full bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm transition-all shadow-md active:scale-[0.99] disabled:opacity-50 cursor-pointer"
                           style={{ boxShadow: "0 4px 14px var(--color-primary-glow)" }}
@@ -2632,6 +2545,13 @@ export default function TransactionDetailPage({
                       <input
                         type="text"
                         value={payNote}
+                        enterKeyHint="done"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
                         onChange={(e) => setPayNote(e.target.value)}
                         placeholder={isLoan ? "Loan return note" : "Debt payment note"}
                         className="flex-1 bg-transparent text-sm text-white outline-none placeholder-slate-500"

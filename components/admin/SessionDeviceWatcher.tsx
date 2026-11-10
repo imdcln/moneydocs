@@ -13,6 +13,9 @@ export default function SessionDeviceWatcher() {
   const isKickingOutRef = useRef(false);
 
   useEffect(() => {
+    try {
+      sessionStorage.removeItem("google_signin_pending");
+    } catch {}
     const deviceId = getClientDeviceId();
     if (!deviceId) return;
 
