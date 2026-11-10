@@ -1,0 +1,25 @@
+{
+  "name": "Money Docs",
+  "short_name": "Money Docs",
+  "description": "Money Docs – Personal finance dashboard – track budgets, wallets & transactions",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0c0d10",
+  "theme_color": "#0c0d10",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/assets/icons/favicon2.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icons/favicon2.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
