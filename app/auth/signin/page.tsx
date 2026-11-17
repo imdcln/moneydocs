@@ -14,6 +14,7 @@ import {
   Sparkles,
   AlertCircle,
   ShieldCheck,
+  ShieldAlert,
   RefreshCw,
   ChevronLeft,
 } from "lucide-react";
@@ -162,15 +163,39 @@ function AuthForm() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Collision handling state (for unverified existing accounts during Google sign-in)
+  const [collisionState, setCollisionState] = useState<{
+    email: string;
+    token: string;
+  } | null>(null);
+  const [collisionPassword, setCollisionPassword] = useState("");
+  const [collisionLoading, setCollisionLoading] = useState(false);
+
   // Catch OAuth callback errors in URL
   useEffect(() => {
+    const collisionParam = searchParams.get("collision");
+    const emailParam = searchParams.get("email");
+    const tokenParam = searchParams.get("token");
+    if (collisionParam === "unverified" && emailParam && tokenParam) {
+      try {
+        sessionStorage.removeItem("google_signin_pending");
+      } catch {}
+      setGoogleLoading(false);
+      setCollisionState({ email: emailParam, token: tokenParam });
+      setError(null);
+    }
+
     const disconnectedParam = searchParams.get("disconnected");
     if (disconnectedParam) {
       setError("This device was disconnected from another session. Please sign in again.");
       try {
         localStorage.removeItem("dclne_device_id");
         document.cookie = "dclne_device_id=; path=/; max-age=0; SameSite=Lax";
+        document.cookie = "authjs.session-token=; path=/; max-age=0; SameSite=Lax";
+        document.cookie = "next-auth.session-token=; path=/; max-age=0; SameSite=Lax";
       } catch {}
+      // Clean up server-side HTTP-only cookies in background
+      fetch("/api/auth/clean-session", { method: "POST" }).catch(() => {});
     }
 
     const errorParam = searchParams.get("error");
@@ -266,6 +291,58 @@ function AuthForm() {
       />
     );
   }
+
+  const handleCollisionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!collisionState || !collisionPassword) return;
+    setCollisionLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const res = await fetch("/api/auth/link-collision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: collisionState.email,
+          password: collisionPassword,
+          token: collisionState.token,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Failed to confirm account ownership.");
+        setCollisionLoading(false);
+        return;
+      }
+
+      setSuccess("Account ownership confirmed! Google account linked. Signing in...");
+      toast("Account linked successfully!", "success");
+
+      // Auto sign-in with credentials
+      const signInRes = await signIn("credentials", {
+        email: collisionState.email,
+        password: collisionPassword,
+        stayLoggedIn: stayLoggedIn ? "1" : "0",
+        redirect: false,
+      });
+
+      if (signInRes?.error) {
+        setError("Account linked, but sign-in failed. Please enter your credentials to log in.");
+        setCollisionState(null);
+        setCollisionLoading(false);
+        return;
+      }
+
+      router.push("/");
+      router.refresh();
+    } catch (err) {
+      console.error("[collision linking error]:", err);
+      setError("Network error. Please try again.");
+      setCollisionLoading(false);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
     setError(null);
@@ -701,8 +778,79 @@ function AuthForm() {
                 </p>
               </div>
 
+              {/* Collision Ownership Verification Banner & Form */}
+              {collisionState && (
+                <div className="bg-[#141519] border border-amber-500/30 rounded-2xl p-5 mb-6 shadow-xl space-y-4 animate-fade-in">
+                  <div className="flex items-center gap-2.5 text-amber-400">
+                    <ShieldAlert className="w-5 h-5 flex-shrink-0" />
+                    <h3 className="font-bold text-sm text-white">Confirm Ownership to Link Google</h3>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    An unverified account with <span className="font-semibold text-white">{collisionState.email}</span> already exists. Enter your existing account password to confirm ownership and automatically link Google.
+                  </p>
+
+                  <form onSubmit={handleCollisionSubmit} className="space-y-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-400 block mb-1">
+                        Existing Account Password
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          value={collisionPassword}
+                          onChange={(e) => {
+                            setCollisionPassword(e.target.value);
+                            setError(null);
+                          }}
+                          placeholder="Enter your password"
+                          required
+                          className="w-full bg-[#1c1e27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-2.5 text-slate-400 hover:text-white"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCollisionState(null);
+                          setCollisionPassword("");
+                          router.replace("/auth/signin");
+                        }}
+                        className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-semibold text-xs transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={collisionLoading || !collisionPassword}
+                        className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs disabled:opacity-50 transition-all flex items-center justify-center gap-1.5"
+                      >
+                        {collisionLoading ? (
+                          <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            <GoogleIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                            <span>Verify &amp; Link</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
               {/* Mode Tabs */}
-              <div className="flex p-1 bg-slate-800/80 border border-white/10 rounded-2xl mb-6">
+              {!collisionState && (
+                <div className="flex p-1 bg-slate-800/80 border border-white/10 rounded-2xl mb-6">
                 <button
                   type="button"
                   onClick={() => {
@@ -752,6 +900,7 @@ function AuthForm() {
                   Create Account
                 </button>
               </div>
+              )}
 
               {/* Error / Success Banners */}
               {error && (
@@ -786,7 +935,9 @@ function AuthForm() {
               )}
 
               {/* Form */}
-              <form onSubmit={handleSubmit} className="space-y-4">
+              {!collisionState && (
+                <>
+                  <form onSubmit={handleSubmit} className="space-y-4">
                 {mode === "register" && (
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
@@ -929,6 +1080,8 @@ function AuthForm() {
                   </>
                 )}
               </button>
+              </>
+              )}
 
               {/* Quick Notice */}
               <div className="mt-6 pt-5 border-t border-white/5 flex items-center justify-center gap-2 text-slate-500 text-xs text-center">

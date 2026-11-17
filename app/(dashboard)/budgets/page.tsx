@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
@@ -26,6 +26,8 @@ import WalletSwitcher from "@/components/admin/WalletSwitcher";
 import { useWalletContext } from "@/hooks/useWalletContext";
 import PageLoading from "@/components/ui/PageLoading";
 import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from "@/lib/clientCache";
+import BudgetOnboardingTour from "@/components/admin/budget/BudgetOnboardingTour";
+import ConfettiEffect from "@/components/transactions/ConfettiEffect";
 
 interface BudgetDetailData {
   _id: string;
@@ -434,6 +436,37 @@ export default function BudgetsPage() {
   const reorderBarSentinelRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
+  // Onboarding Tour state
+  const [tourOpen, setTourOpen] = useState(false);
+  const [hasCompletedTour, setHasCompletedTour] = useState(false);
+  const [showCelebrationToast, setShowCelebrationToast] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("moneydocs_tour_completed_budgets") === "true") {
+        setHasCompletedTour(true);
+      }
+    } catch {}
+  }, []);
+
+  const handleStartTour = () => {
+    if (pageMode !== "running") {
+      setPageMode("running");
+    }
+    setTourOpen(true);
+  };
+
+  const handleCompleteTour = () => {
+    setHasCompletedTour(true);
+    try {
+      localStorage.setItem("moneydocs_tour_completed_budgets", "true");
+    } catch {}
+    setShowCelebration(true);
+    setShowCelebrationToast(true);
+    setTimeout(() => setShowCelebrationToast(false), 5000);
+  };
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -585,7 +618,7 @@ export default function BudgetsPage() {
     existingPeriodTypes.includes(p)
   );
   if (availablePeriods.length === 0) {
-    availablePeriods = ["MONTH"];
+    availablePeriods = tourOpen ? ["MONTH", "WEEK", "QUARTER"] : ["MONTH"];
   }
 
   // Ensure active tab stays in sync with available tabs
@@ -607,6 +640,10 @@ export default function BudgetsPage() {
   const currentTabBudgets = pageMode === "running"
     ? budgets.filter((b) => (b.periodType || "MONTH") === activePeriodTab)
     : budgets;
+
+  // When the tour is active but the user has no budgets yet, show a preview dummy layout
+  // so every spotlight step points at real, visible content. Reverts when tour closes.
+  const isTourPreview = tourOpen && currentTabBudgets.length === 0;
 
   const allCatBudget = currentTabBudgets.find(
     (b) => b.category === "ALL_CATEGORIES" || b.category === "ALL"
@@ -690,7 +727,7 @@ export default function BudgetsPage() {
         <div className="flex items-center gap-2">
           <WalletSwitcher iconOnly />
           {/* Ã¢â€â‚¬Ã¢â€â‚¬ Three-dot menu for mode switching Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
-          <div className="relative" ref={modeDropdownRef}>
+          <div className="relative" ref={modeDropdownRef} id="spotlight-budget-edit-controls">
             <button
               onClick={() => setShowModeDropdown((v) => !v)}
               className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
@@ -738,17 +775,29 @@ export default function BudgetsPage() {
           </div>
 
           <button
-            className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
-            aria-label="Help"
+            type="button"
+            onClick={handleStartTour}
+            className="relative w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer group"
+            title="Interactive Tour & Guide"
+            aria-label="Start Budget Onboarding Tour"
           >
-            <HelpCircle className="w-5 h-5" />
+            <HelpCircle className="w-5 h-5 transition-transform duration-200 group-hover:scale-110" />
+            {!hasCompletedTour && (
+              <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 pointer-events-none">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-primary-light,#34d399)] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[var(--color-primary,#10b981)]" />
+              </span>
+            )}
           </button>
         </div>
       </div>
 
       {/* Ã¢â€â‚¬Ã¢â€â‚¬ Tab row (only for running mode) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
       {pageMode === "running" && (
-        <div className="flex items-center gap-6 px-5 pb-1 border-b border-white/8 overflow-x-auto no-scrollbar">
+        <div
+          id="spotlight-budget-tabs"
+          className="flex items-center gap-6 px-5 pb-1 border-b border-white/8 overflow-x-auto no-scrollbar"
+        >
           {availablePeriods.map((period) => {
             const isActive = activePeriodTab === period;
             return (
@@ -966,8 +1015,99 @@ export default function BudgetsPage() {
           </div>
         )
       ) : currentTabBudgets.length === 0 ? (
-        /* â”€â”€ RUNNING BUDGETS EMPTY STATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-        <div className="flex flex-col items-center justify-center text-center pt-16 pb-12 px-6 space-y-4">
+        /* -- RUNNING BUDGETS EMPTY STATE -- */
+        isTourPreview ? (
+          /* Tour Preview: dummy full layout so every spotlight hits real content */
+          <>
+            {/* Dummy spotlight-budget-summary: speedometer card with fake data */}
+            <div
+              id="spotlight-budget-summary"
+              className="mx-5 mt-4 bg-[#141519] border border-white/8 rounded-3xl overflow-hidden pointer-events-none select-none"
+              aria-hidden="true"
+            >
+              <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
+                <div className="flex items-center gap-3">
+                  <AllCategoriesGlobeGraphic size={34} />
+                  <span className="text-white font-semibold text-sm">All Categories</span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-slate-500" />
+              </div>
+              <div className="px-5 pt-2 pb-5 space-y-4">
+                <SpeedometerGauge spentPercent={42} canSpend={58000} isOver={false} overspentAmount={0} />
+                <div className="flex items-center divide-x divide-white/10 pt-1">
+                  <div className="flex-1 text-center px-1">
+                    <p className="text-white font-bold text-sm tracking-tight">100K</p>
+                    <p className="text-slate-400 text-[11px] mt-0.5">Total budgets</p>
+                  </div>
+                  <div className="flex-1 text-center px-1">
+                    <p className="text-white font-bold text-sm tracking-tight">42K</p>
+                    <p className="text-slate-400 text-[11px] mt-0.5">Total spent</p>
+                  </div>
+                  <div className="flex-1 text-center px-1">
+                    <p className="text-white font-bold text-sm tracking-tight">12 days</p>
+                    <p className="text-slate-400 text-[11px] mt-0.5">End of month</p>
+                  </div>
+                </div>
+                <button
+                  id="spotlight-create-budget-btn"
+                  type="button"
+                  className="w-full py-3.5 rounded-full text-white font-bold text-sm shadow-xl transition-all"
+                  style={{
+                    backgroundColor: "var(--color-primary)",
+                    boxShadow: "0 10px 25px -4px var(--color-primary-glow)",
+                  }}
+                >
+                  Create Budget
+                </button>
+              </div>
+            </div>
+
+            {/* Dummy spotlight-budget-list: three skeleton budget cards */}
+            <div
+              id="spotlight-budget-list"
+              className="px-5 mt-4 space-y-3.5 pointer-events-none select-none"
+              aria-hidden="true"
+            >
+              {([
+                { label: "Food & Dining", cat: "FOOD_BEVERAGE", pct: 65, limit: "1,500,000", leftAmt: "525,000" },
+                { label: "Transport", cat: "TRANSPORTATION", pct: 30, limit: "800,000", leftAmt: "560,000" },
+                { label: "Entertainment", cat: "ENTERTAINMENT", pct: 85, limit: "500,000", leftAmt: "75,000" },
+              ] as { label: string; cat: string; pct: number; limit: string; leftAmt: string }[]).map((item) => (
+                <div
+                  key={item.label}
+                  className="bg-[#141519] border border-white/8 rounded-3xl p-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <CategoryIcon categoryId={item.cat} size="md" />
+                      <h3 className="text-white font-bold text-base truncate">{item.label}</h3>
+                    </div>
+                    <div className="flex flex-col items-end flex-shrink-0 ml-2">
+                      <span className="text-white font-bold text-base">{item.limit}</span>
+                      <span className="text-slate-400 text-xs">{item.leftAmt} left</span>
+                    </div>
+                  </div>
+                  <div className="relative mt-2.5 pb-5">
+                    <div className="w-full h-2 rounded-full bg-[#1e2027] overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${item.pct}%`, backgroundColor: "var(--color-primary)" }}
+                      />
+                    </div>
+                    <div
+                      className="absolute top-2.5 -translate-x-1/2 flex flex-col items-center pointer-events-none"
+                      style={{ left: "60%" }}
+                    >
+                      <div className="w-0.5 h-1.5 bg-white/40 mb-0.5" />
+                      <span className="px-2 py-0.5 rounded-md bg-[#252830] text-slate-300 text-[9px] font-medium">Today</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+        <div id="spotlight-budget-summary" className="flex flex-col items-center justify-center text-center pt-16 pb-12 px-6 space-y-4">
           <EmptyBudgetIllustration />
           <h2 className="text-white text-xl font-extrabold tracking-tight mt-2">
             You have no {PERIOD_CONFIG[activePeriodTab]?.label.toLowerCase() || ""} budget for {walletLabel}
@@ -977,6 +1117,7 @@ export default function BudgetsPage() {
           </p>
           <div className="pt-2 w-full max-w-xs">
             <button
+              id="spotlight-create-budget-btn"
               onClick={handleOpenAddModal}
               className="w-full py-4 rounded-full text-white font-bold text-sm shadow-xl active:scale-[0.98] transition-all cursor-pointer hover:opacity-95"
               style={{
@@ -988,12 +1129,14 @@ export default function BudgetsPage() {
             </button>
           </div>
         </div>
+        )
       ) : (
         /* Ã¢â€â‚¬Ã¢â€â‚¬ RUNNING BUDGETS VIEW Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */
         <>
           {/* Ã¢â€â‚¬Ã¢â€â‚¬ Unified All Categories Card (Clickable unity into detail page) Ã¢â€â‚¬Ã¢â€â‚¬ */}
           {allCatBudget ? (
             <Link
+              id="spotlight-budget-summary"
               href={`/budgets/${allCatBudget._id}?monthYear=${monthYear}${
                 selectedWalletId && selectedWalletId !== "ALL" ? `&walletId=${selectedWalletId}` : ""
               }`}
@@ -1041,6 +1184,7 @@ export default function BudgetsPage() {
 
                 {/* Create Budget */}
                 <button
+                  id="spotlight-create-budget-btn"
                   type="button"
                   onClick={(e) => {
                     e.preventDefault();
@@ -1059,6 +1203,7 @@ export default function BudgetsPage() {
             </Link>
           ) : (
             <div
+              id="spotlight-budget-summary"
               onClick={handleOpenAddModal}
               className="mx-5 mt-4 bg-[#141519] border border-white/8 rounded-3xl overflow-hidden cursor-pointer hover:border-white/15 active:scale-[0.99] transition-all"
             >
@@ -1094,6 +1239,7 @@ export default function BudgetsPage() {
 
                 {/* Create Budget */}
                 <button
+                  id="spotlight-create-budget-btn"
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -1113,7 +1259,7 @@ export default function BudgetsPage() {
 
           {/* Ã¢â€â‚¬Ã¢â€â‚¬ Individual budget cards (ALL_CATEGORIES excluded) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
           {isReordering ? (
-            <div className="space-y-3.5">
+            <div id="spotlight-budget-list" className="space-y-3.5">
               <Reorder.Group
                 axis="y"
                 values={reorderList}
@@ -1148,7 +1294,7 @@ export default function BudgetsPage() {
                 ))}
             </div>
           ) : (
-            <div className="px-5 mt-4 space-y-3.5">
+            <div id="spotlight-budget-list" className="px-5 mt-4 space-y-3.5">
               {cardBudgets.map((b, idx) => {
                 const isOther = b.category === "OTHER_CATEGORIES" || b.isOtherCategories;
                 return (
@@ -1188,6 +1334,44 @@ export default function BudgetsPage() {
         initialBudget={editingBudget}
         initialWalletId={selectedWalletId}
         initialPeriodType={activePeriodTab}
+      />
+
+      {/* Celebratory Confetti */}
+      {showCelebration && (
+        <ConfettiEffect
+          duration={3800}
+          particleCount={140}
+          onComplete={() => setShowCelebration(false)}
+        />
+      )}
+
+      {/* "You're all set!" Toast Banner */}
+      {showCelebrationToast && (
+        <div
+          className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] w-[calc(100vw-32px)] max-w-md sm:w-auto flex items-center gap-3.5 px-4 sm:px-5 py-3 rounded-2xl bg-[#1a1c24]/95 border border-[var(--color-primary-border)] text-[var(--color-primary-light)] shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top duration-300"
+          style={{
+            boxShadow: "0 12px 30px -6px var(--color-primary-glow, rgba(0,0,0,0.5))",
+          }}
+        >
+          <div className="w-9 h-9 rounded-full bg-[var(--color-primary-subtle)] border border-[var(--color-primary-border)] flex-shrink-0 flex items-center justify-center text-base">
+            🎉
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs sm:text-sm font-bold text-white tracking-wide">
+              You&apos;re all set! Onboarding Complete
+            </p>
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
+              Tap the <span className="text-[var(--color-primary-light)] font-semibold">?</span> icon anytime if you need a refresher.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Onboarding Tour Overlay */}
+      <BudgetOnboardingTour
+        isOpen={tourOpen}
+        onClose={() => setTourOpen(false)}
+        onComplete={handleCompleteTour}
       />
     </div>
   );

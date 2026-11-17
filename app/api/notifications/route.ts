@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/models/User";
 import Notification from "@/models/Notification";
+import { cleanNotificationText } from "@/lib/notificationUtils";
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,10 +27,39 @@ export async function GET(req: NextRequest) {
       query.type = type.toUpperCase();
     }
 
-    const [notifications, unreadCount] = await Promise.all([
+    const [rawNotifications, unreadCount] = await Promise.all([
       Notification.find(query).sort({ createdAt: -1 }).limit(limit).lean(),
       Notification.countDocuments({ userId: user._id, isRead: false }),
     ]);
+
+    const notifications = rawNotifications.map((n) => ({
+      ...n,
+      title: cleanNotificationText(n.title),
+      message: cleanNotificationText(n.message),
+    }));
+
+    // Self-heal corrupted notification records in database
+    const corruptedIds = rawNotifications
+      .filter((n) => /âš|â€|â”/.test(n.title || "") || /âš|â€|â”/.test(n.message || ""))
+      .map((n) => n._id);
+
+    if (corruptedIds.length > 0) {
+      Promise.all(
+        corruptedIds.map((id) => {
+          const doc = rawNotifications.find((n) => n._id === id);
+          if (!doc) return Promise.resolve();
+          return Notification.updateOne(
+            { _id: id },
+            {
+              $set: {
+                title: cleanNotificationText(doc.title),
+                message: cleanNotificationText(doc.message),
+              },
+            }
+          );
+        })
+      ).catch((err) => console.error("Self-heal notification error:", err));
+    }
 
     return NextResponse.json({
       notifications,

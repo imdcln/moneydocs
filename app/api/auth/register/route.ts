@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/models/User";
+import Account from "@/models/Account";
 
 export async function POST(req: NextRequest) {
   try {
@@ -64,11 +65,24 @@ export async function POST(req: NextRequest) {
       name: cleanName,
       email: cleanEmail,
       password: hashedPassword,
+      passwordHash: hashedPassword,
       baseCurrency: baseCurrency || "IDR",
       hasCompletedOnboarding: false,
       authProvider: "credentials",
       isVerified: false,
     });
+
+    await Account.findOneAndUpdate(
+      { provider: "credentials", providerAccountId: cleanEmail },
+      {
+        userId: newUser._id,
+        provider: "credentials",
+        providerAccountId: cleanEmail,
+        emailVerified: false,
+        type: "credentials",
+      },
+      { upsert: true, new: true }
+    );
 
     return NextResponse.json(
       {

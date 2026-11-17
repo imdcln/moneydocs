@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Calculator,
+  ShieldCheck,
 } from "lucide-react";
 import GlobalCurrencyModal from "@/components/admin/GlobalCurrencyModal";
 import WalletManagerModal from "@/components/admin/WalletManagerModal";
@@ -296,6 +297,23 @@ export default function AccountPage() {
           </div>
           <ChevronRight className="w-5 h-5 text-slate-500" />
         </button>
+
+        {/* Login & Security */}
+        <Link
+          href="/account/my-account#security"
+          className="flex items-center justify-between p-4 hover:bg-white/3 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300">
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-white font-semibold text-sm">Login &amp; Security</p>
+              <p className="text-slate-400 text-xs">Google account, password &amp; lockout protection</p>
+            </div>
+          </div>
+          <ChevronRight className="w-5 h-5 text-slate-500" />
+        </Link>
 
         {/* My Wallets */}
         <button

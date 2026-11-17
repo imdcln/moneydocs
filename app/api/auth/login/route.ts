@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const user = await User.findOne({ email: cleanEmail }).select("+password");
+    const user = await User.findOne({ email: cleanEmail }).select("+password +passwordHash");
 
     if (!user) {
       return NextResponse.json(
@@ -48,7 +48,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!user.password) {
+    const userPassword = user.passwordHash || user.password;
+    if (!userPassword) {
       return NextResponse.json(
         {
           error: "This account was registered using Google Sign-In. Please sign in with Google.",
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const isPasswordValid = await bcrypt.compare(String(password), user.password);
+    const isPasswordValid = await bcrypt.compare(String(password), userPassword);
 
     if (!isPasswordValid) {
       return NextResponse.json(

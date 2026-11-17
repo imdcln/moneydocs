@@ -3,19 +3,21 @@ import mongoose from "mongoose";
 import Notification, { NotificationType } from "@/models/Notification";
 import User from "@/models/User";
 import { connectDB } from "@/lib/mongoose";
+import { cleanNotificationText } from "@/lib/notificationUtils";
 
-// Setup VAPID keys
-const vapidPublicKey =
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ||
-  "BJtjXcn7pd0xvjjnkL1YCKz4jIB_ja4a5_dX0pa4Jpi9SdWU0xdIV4WARYRETbGA7bUxgxxxGjQe4tayLgprUCc";
-const vapidPrivateKey =
-  process.env.VAPID_PRIVATE_KEY || "eTya7Uz7WMyoLMM7MhamTXTH_Gk1brvfhqG7hujdsac";
-const vapidSubject = process.env.VAPID_SUBJECT || "mailto:admin@dclne.com";
+// Setup VAPID keys from environment variables
+const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+const vapidSubject = process.env.VAPID_SUBJECT || "mailto:admin@moneydocs.app";
 
-try {
-  webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-} catch (err) {
-  console.warn("Failed to set VAPID details:", err);
+if (vapidPublicKey && vapidPrivateKey) {
+  try {
+    webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+  } catch (err) {
+    console.warn("Failed to set VAPID details:", err);
+  }
+} else {
+  console.warn("VAPID keys not configured in environment variables. Web push notifications will be skipped.");
 }
 
 export interface SendNotificationOptions {
@@ -46,12 +48,15 @@ export async function createAndSendNotification({
     const userObjectId =
       typeof userId === "string" ? new mongoose.Types.ObjectId(userId) : userId;
 
+    const cleanTitle = cleanNotificationText(title);
+    const cleanMessage = cleanNotificationText(message);
+
     // 1. Create DB notification record
     const notif = await Notification.create({
       userId: userObjectId,
       type,
-      title,
-      message,
+      title: cleanTitle,
+      message: cleanMessage,
       link,
       metadata,
       isRead: false,
@@ -64,9 +69,12 @@ export async function createAndSendNotification({
     }
 
     // 3. Payload for native device notification
+    if (!vapidPublicKey || !vapidPrivateKey) {
+      return notif;
+    }
     const pushPayload = JSON.stringify({
-      title,
-      body: message,
+      title: cleanTitle,
+      body: cleanMessage,
       icon,
       badge: "/assets/icons/favicon2.png",
       url: link,

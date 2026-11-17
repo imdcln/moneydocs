@@ -17,9 +17,11 @@
  *   z-[52]  ← floating tooltip card (above the shadow ring)
  *   z-[53]  ← top-right HUD controls (always on top)
  *
- * Zero layout shift: spotlight div is position:fixed, reads viewport coords,
- * starts opacity-0 and fades in only after measurements are confirmed.
- * Two deferred measurements (150 ms + 380 ms) absorb smooth-scroll lag.
+ * Responsive:
+ *   Adapts tooltip width on small devices so it never overflows the viewport width.
+ *   Clamps spotlight bounds to viewport edges.
+ *   Respects active user color theme dynamically (not fixed green).
+ *   Locks body and touch/wheel scrolling during active tour.
  */
 
 import {
@@ -30,6 +32,7 @@ import {
   type ReactNode,
 } from "react";
 import { X, ChevronRight, ChevronLeft, CheckCircle2 } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -69,15 +72,15 @@ interface SpotlightRect {
 interface TooltipPos {
   top: number;
   left: number;
+  width: number;
   placement: "top" | "bottom";
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TOOLTIP_WIDTH = 356;
+const TOOLTIP_MAX_WIDTH = 356;
 const TOOLTIP_HEIGHT_ESTIMATE = 210;
 const CARD_GAP = 14;
-const EDGE_MARGIN = 16;
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -91,8 +94,14 @@ export default function OnboardingSpotlight({
   onComplete,
   padding = 10,
 }: OnboardingSpotlightProps) {
+  const { currentColor } = useTheme();
   const [rect, setRect] = useState<SpotlightRect | null>(null);
-  const [tooltipPos, setTooltipPos] = useState<TooltipPos>({ top: 0, left: 0, placement: "bottom" });
+  const [tooltipPos, setTooltipPos] = useState<TooltipPos>({
+    top: 0,
+    left: 0,
+    width: TOOLTIP_MAX_WIDTH,
+    placement: "bottom",
+  });
   const [measured, setMeasured] = useState(false);
 
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -106,65 +115,127 @@ export default function OnboardingSpotlight({
   const measure = useCallback(() => {
     if (!isOpen || !step) return;
 
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const effectiveMargin = vw < 380 ? 12 : 16;
+
+    // Tooltip width is responsive: fits comfortably within small devices without overflowing
+    const cardWidth = Math.min(TOOLTIP_MAX_WIDTH, Math.max(260, vw - effectiveMargin * 2));
+
     const el = document.getElementById(step.targetId);
 
     let sr: SpotlightRect;
     if (!el) {
       // Graceful fallback: center a placeholder rectangle
+      const fallbackW = Math.min(280, vw - effectiveMargin * 2);
       sr = {
-        top: window.innerHeight / 2 - 80,
-        left: window.innerWidth / 2 - 140,
-        width: 280,
+        top: Math.max(16, vh / 2 - 80),
+        left: Math.max(effectiveMargin, (vw - fallbackW) / 2),
+        width: fallbackW,
         height: 160,
         borderRadius: 20,
       };
     } else {
       const r = el.getBoundingClientRect();
       const radius = parseFloat(window.getComputedStyle(el).borderRadius) || 16;
+
+      // Ensure the spotlight highlight cutout never extends beyond viewport boundaries
+      const sLeft = Math.max(4, r.left - padding);
+      const sRight = Math.min(vw - 4, r.right + padding);
+      const sWidth = Math.max(0, sRight - sLeft);
+
       sr = {
         top: Math.max(0, r.top - padding),
-        left: Math.max(0, r.left - padding),
-        width: r.width + padding * 2,
+        left: sLeft,
+        width: sWidth,
         height: r.height + padding * 2,
         borderRadius: Math.min(radius + 4, 24),
       };
     }
 
+    // ── Tooltip placement math ──────────────────────────────────────────────
+    // Ensure card stays above the bottom navigation bar (accounting for FAB button protrusion)
+    const bottomNavEl = document.querySelector("nav.fixed.bottom-0") || document.getElementById("bottom-nav");
+    let bottomNavClearance = 84;
+    if (bottomNavEl) {
+      const navRect = bottomNavEl.getBoundingClientRect();
+      if (navRect.top > 0 && navRect.top < vh) {
+        bottomNavClearance = Math.max(bottomNavClearance, vh - navRect.top + 36);
+      }
+    }
+    const maxBottom = vh - bottomNavClearance;
+
+    const cardHeight = tooltipRef.current?.offsetHeight || TOOLTIP_HEIGHT_ESTIMATE;
+
+    // Cap spotlight height if element is unusually tall, so it doesn't crowd out the bottom card space
+    const maxSpotlightHeight = Math.max(100, maxBottom - sr.top - cardHeight - CARD_GAP - 8);
+    if (sr.height > maxSpotlightHeight) {
+      sr.height = maxSpotlightHeight;
+    }
+
     setRect(sr);
 
-    // ── Tooltip placement math ──────────────────────────────────────────────
-    // Determine whether the card fits better above or below the spotlight box.
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const spaceBelow = vh - (sr.top + sr.height);
-    const spaceAbove = sr.top;
-    const fits = (space: number) => space >= TOOLTIP_HEIGHT_ESTIMATE + CARD_GAP + EDGE_MARGIN;
+    // ── Tooltip placement: Always place BELOW spotlight area to never collide with top Skip button ──
+    const placement: "top" | "bottom" = "bottom";
 
-    let placement: "top" | "bottom" =
-      step.preferredPlacement === "top" || step.preferredPlacement === "bottom"
-        ? step.preferredPlacement
-        : fits(spaceBelow)
-        ? "bottom"
-        : "top";
+    let top = sr.top + sr.height + CARD_GAP;
 
-    // Safety flip: if our preference doesn't fit, switch
-    if (placement === "bottom" && !fits(spaceBelow) && fits(spaceAbove)) placement = "top";
-    if (placement === "top" && !fits(spaceAbove) && fits(spaceBelow)) placement = "bottom";
+    // Strict boundary clamping:
+    // minTop: strictly 64px down (below the top-right Skip HUD button)
+    // maxTop: maxBottom - cardHeight (strictly above the footer nav)
+    const minTop = 64;
+    const maxTop = Math.max(minTop, maxBottom - cardHeight);
+    top = Math.max(minTop, Math.min(top, maxTop));
 
-    let top =
-      placement === "bottom"
-        ? sr.top + sr.height + CARD_GAP
-        : sr.top - TOOLTIP_HEIGHT_ESTIMATE - CARD_GAP;
+    // Horizontal: center on spotlight, strictly clamped to viewport edges
+    let left = sr.left + sr.width / 2 - cardWidth / 2;
+    left = Math.max(effectiveMargin, Math.min(left, vw - cardWidth - effectiveMargin));
 
-    // Horizontal: center on spotlight, clamped to viewport edges
-    let left = sr.left + sr.width / 2 - TOOLTIP_WIDTH / 2;
-
-    top = Math.max(EDGE_MARGIN, Math.min(top, vh - TOOLTIP_HEIGHT_ESTIMATE - EDGE_MARGIN));
-    left = Math.max(EDGE_MARGIN, Math.min(left, vw - TOOLTIP_WIDTH - EDGE_MARGIN));
-
-    setTooltipPos({ top, left, placement });
+    setTooltipPos({ top, left, width: cardWidth, placement });
     setMeasured(true);
   }, [isOpen, step, padding]);
+
+  // ── Lock page scroll when tour is open ───────────────────────────────────
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    const originalPaddingRight = document.body.style.paddingRight;
+
+    // Compensate for scrollbar jump on desktop when overflow is hidden
+    const scrollBarWidth = window.innerWidth - document.documentElement.clientWidth;
+    if (scrollBarWidth > 0) {
+      document.body.style.paddingRight = `${scrollBarWidth}px`;
+    }
+
+    document.body.style.overflow = "hidden";
+
+    // Intercept touch and wheel scroll events to prevent page scrolling
+    const preventScroll = (e: Event) => {
+      e.preventDefault();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const scrollKeys = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
+      if (scrollKeys.includes(e.key)) {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener("wheel", preventScroll, { passive: false });
+    window.addEventListener("touchmove", preventScroll, { passive: false });
+    window.addEventListener("keydown", handleKeyDown, { passive: false });
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.body.style.paddingRight = originalPaddingRight;
+
+      window.removeEventListener("wheel", preventScroll);
+      window.removeEventListener("touchmove", preventScroll);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   // ── Scroll into view + deferred re-measure on step change ─────────────────
 
@@ -174,16 +245,25 @@ export default function OnboardingSpotlight({
 
     const el = document.getElementById(step.targetId);
     if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      const rect = el.getBoundingClientRect();
+      const topHudOffset = 70; // Clearance below the top Skip button HUD
+      // Scroll element so its top is positioned below the top HUD,
+      // maximizing open space below for the tooltip card
+      const elementAbsoluteTop = window.scrollY + rect.top;
+      const targetScrollY = Math.max(0, elementAbsoluteTop - topHudOffset);
+      window.scrollTo({ top: targetScrollY, behavior: "smooth" });
     }
 
     // Two measurements: fast (before scroll finishes) + settled (after scroll)
     const t1 = setTimeout(measure, 150);
     const t2 = setTimeout(measure, 380);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [isOpen, currentStep, step, measure]);
 
-  // ── Passive scroll/resize listener ────────────────────────────────────────
+  // ── Passive resize & scroll listener for responsive updates ───────────────
 
   useEffect(() => {
     if (!isOpen) return;
@@ -201,8 +281,10 @@ export default function OnboardingSpotlight({
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
-      else if (e.key === "ArrowRight" || e.key === "Enter") {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === "ArrowRight" || e.key === "Enter") {
         e.preventDefault();
         isLast ? onComplete() : onNext();
       } else if (e.key === "ArrowLeft" && !isFirst) {
@@ -232,7 +314,7 @@ export default function OnboardingSpotlight({
       role="dialog"
       aria-modal="true"
       aria-label="Interactive onboarding tour"
-      className="fixed inset-0 z-50 overflow-hidden select-none cursor-pointer"
+      className="fixed inset-0 z-[70] overflow-hidden select-none cursor-pointer touch-none overscroll-none"
       onClick={handleBackdrop}
     >
       {/* ── Spotlight Cutout ─────────────────────────────────────────────── */}
@@ -246,26 +328,26 @@ export default function OnboardingSpotlight({
             width: rect.width,
             height: rect.height,
             borderRadius: rect.borderRadius,
-            // The enormous box-shadow creates the dark backdrop outside the box.
-            // The box itself stays transparent, acting as the visible "window".
-            boxShadow: `0 0 0 9999px rgba(0,0,0,0.76), 0 0 32px 4px rgba(16,185,129,0.30)`,
-            transition: "top 320ms cubic-bezier(0.4,0,0.2,1), left 320ms cubic-bezier(0.4,0,0.2,1), width 320ms cubic-bezier(0.4,0,0.2,1), height 320ms cubic-bezier(0.4,0,0.2,1), opacity 180ms ease",
+            boxShadow: `0 0 0 9999px rgba(0,0,0,0.76), 0 0 0 3px var(--color-primary-subtle, ${currentColor.subtle}), 0 0 32px 6px var(--color-primary-glow, ${currentColor.glow})`,
+            borderColor: `var(--color-primary-light, ${currentColor.primaryLight})`,
+            transition:
+              "top 320ms cubic-bezier(0.4,0,0.2,1), left 320ms cubic-bezier(0.4,0,0.2,1), width 320ms cubic-bezier(0.4,0,0.2,1), height 320ms cubic-bezier(0.4,0,0.2,1), opacity 180ms ease",
             opacity: measured ? 1 : 0,
             pointerEvents: "none",
           }}
-          className="border-2 border-emerald-400/80 ring-4 ring-emerald-500/15 z-[51]"
+          className="border-2 z-[71]"
         >
-          {/* Corner scan-line brackets (purely decorative) */}
-          <BracketCorner pos="tl" />
-          <BracketCorner pos="tr" />
-          <BracketCorner pos="bl" />
-          <BracketCorner pos="br" />
+          {/* Corner scan-line brackets (respects user theme) */}
+          <BracketCorner pos="tl" color={currentColor.primaryLight} />
+          <BracketCorner pos="tr" color={currentColor.primaryLight} />
+          <BracketCorner pos="bl" color={currentColor.primaryLight} />
+          <BracketCorner pos="br" color={currentColor.primaryLight} />
         </div>
       )}
 
       {/* ── HUD: top-right controls ──────────────────────────────────────── */}
       <div
-        className="fixed top-4 right-4 z-[53] flex items-center gap-2.5"
+        className="fixed top-3 right-3 sm:top-4 sm:right-4 z-[73] flex items-center gap-2.5"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Keyboard hint pill – desktop only */}
@@ -280,7 +362,7 @@ export default function OnboardingSpotlight({
         <button
           type="button"
           onClick={onClose}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#111318]/95 hover:bg-[#1a1c24] text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/20 transition-all text-xs font-medium shadow-xl backdrop-blur-md cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full bg-[#111318]/95 hover:bg-[#1a1c24] text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/20 transition-all text-xs font-medium shadow-xl backdrop-blur-md cursor-pointer"
           title="Skip onboarding tour (ESC)"
         >
           Skip
@@ -296,32 +378,50 @@ export default function OnboardingSpotlight({
           position: "fixed",
           top: tooltipPos.top,
           left: tooltipPos.left,
-          width: TOOLTIP_WIDTH,
-          transition: "top 320ms cubic-bezier(0.4,0,0.2,1), left 320ms cubic-bezier(0.4,0,0.2,1), opacity 200ms ease",
+          width: tooltipPos.width,
+          maxWidth: "calc(100vw - 24px)",
+          boxSizing: "border-box",
+          transition:
+            "top 320ms cubic-bezier(0.4,0,0.2,1), left 320ms cubic-bezier(0.4,0,0.2,1), width 320ms cubic-bezier(0.4,0,0.2,1), opacity 200ms ease",
           opacity: measured ? 1 : 0,
         }}
-        className="z-[52] cursor-default"
+        className="z-[72] cursor-default"
       >
         {/* Card shell */}
-        <div className="relative overflow-hidden rounded-2xl bg-[#131519]/98 border border-emerald-500/25 shadow-2xl shadow-black/60 backdrop-blur-2xl">
-
-          {/* Subtle emerald glow bleed behind card */}
+        <div
+          style={{
+            borderColor: `var(--color-primary-border, ${currentColor.border})`,
+            boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px -4px var(--color-primary-subtle, ${currentColor.subtle})`,
+          }}
+          className="relative overflow-hidden rounded-2xl bg-[#131519]/98 border shadow-2xl backdrop-blur-2xl"
+        >
+          {/* Subtle theme glow bleed behind card */}
           <div
             aria-hidden="true"
-            className="absolute -top-10 left-1/2 -translate-x-1/2 w-48 h-24 bg-emerald-500/8 rounded-full blur-3xl pointer-events-none"
+            style={{
+              backgroundColor: `var(--color-primary, ${currentColor.primary})`,
+            }}
+            className="absolute -top-10 left-1/2 -translate-x-1/2 w-48 h-24 opacity-15 rounded-full blur-3xl pointer-events-none"
           />
 
           {/* ── Card Header: Unified Step Badge + Title ─────────────────── */}
-          <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-3 border-b border-white/[0.06]">
-            <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center justify-between gap-2 sm:gap-3 px-3.5 sm:px-4 pt-3.5 sm:pt-4 pb-2.5 sm:pb-3 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               {/* Step badge pill */}
-              <span className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold tracking-wide uppercase">
-                <SparkleIcon />
+              <span
+                style={{
+                  backgroundColor: `var(--color-primary-subtle, ${currentColor.subtle})`,
+                  borderColor: `var(--color-primary-border, ${currentColor.border})`,
+                  color: `var(--color-primary-light, ${currentColor.primaryLight})`,
+                }}
+                className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase border"
+              >
+                <SparkleIcon color={currentColor.primaryLight} />
                 {currentStep + 1}/{steps.length}
               </span>
-              {/* Step title – in the same line as the badge */}
-              <h3 className="text-sm font-semibold text-slate-100 truncate">
-                {step.icon && <span className="mr-1.5">{step.icon}</span>}
+              {/* Step title */}
+              <h3 className="text-xs sm:text-sm font-semibold text-slate-100 truncate">
+                {step.icon && <span className="mr-1">{step.icon}</span>}
                 {step.title}
               </h3>
             </div>
@@ -338,14 +438,14 @@ export default function OnboardingSpotlight({
           </div>
 
           {/* ── Card Body: Description ───────────────────────────────────── */}
-          <div className="px-4 py-3.5">
-            <p className="text-[13px] text-slate-300 leading-[1.65] tracking-[0.01em]">
+          <div className="px-3.5 sm:px-4 py-3 sm:py-3.5">
+            <p className="text-xs sm:text-[13px] text-slate-300 leading-[1.65] tracking-[0.01em]">
               {step.description}
             </p>
           </div>
 
           {/* ── Card Footer: Progress + Navigation ──────────────────────── */}
-          <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-1">
+          <div className="flex items-center justify-between gap-2 px-3.5 sm:px-4 pb-3.5 sm:pb-4 pt-1">
             {/* Segmented progress track */}
             <div className="flex items-center gap-1">
               {steps.map((_, i) => (
@@ -356,22 +456,22 @@ export default function OnboardingSpotlight({
                     width: i === currentStep ? 20 : 6,
                     backgroundColor:
                       i === currentStep
-                        ? "#10b981"           // emerald-500
+                        ? `var(--color-primary, ${currentColor.primary})`
                         : i < currentStep
-                        ? "rgba(16,185,129,0.4)"  // emerald muted past
-                        : "rgba(255,255,255,0.1)", // upcoming
+                        ? `var(--color-primary-border, ${currentColor.border})`
+                        : "rgba(255,255,255,0.12)",
                   }}
                 />
               ))}
             </div>
 
             {/* Nav buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               {!isFirst && (
                 <button
                   type="button"
                   onClick={onPrev}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] transition-all cursor-pointer"
+                  className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] transition-all cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                   Back
@@ -381,10 +481,12 @@ export default function OnboardingSpotlight({
               <button
                 type="button"
                 onClick={isLast ? onComplete : onNext}
-                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer hover:scale-[1.03] active:scale-[0.97] shadow-md ${
-                  isLast
-                    ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30 font-bold"
-                    : "bg-emerald-500/90 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20"
+                style={{
+                  backgroundColor: `var(--color-primary, ${currentColor.primary})`,
+                  boxShadow: `0 4px 14px 0 var(--color-primary-glow, ${currentColor.glow})`,
+                }}
+                className={`flex items-center gap-1 sm:gap-1.5 px-3.5 sm:px-4 py-1.5 rounded-xl text-xs font-semibold text-white transition-all cursor-pointer hover:brightness-110 hover:scale-[1.03] active:scale-[0.97] shadow-md ${
+                  isLast ? "font-bold" : ""
                 }`}
               >
                 {isLast ? (
@@ -409,6 +511,8 @@ export default function OnboardingSpotlight({
             placement={tooltipPos.placement}
             spotlightCenterX={rect.left + rect.width / 2}
             cardLeft={tooltipPos.left}
+            cardWidth={tooltipPos.width}
+            borderColor={currentColor.border}
           />
         )}
       </div>
@@ -419,7 +523,13 @@ export default function OnboardingSpotlight({
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
 /** Animated scanning corner bracket decoration on the spotlight cutout */
-function BracketCorner({ pos }: { pos: "tl" | "tr" | "bl" | "br" }) {
+function BracketCorner({
+  pos,
+  color,
+}: {
+  pos: "tl" | "tr" | "bl" | "br";
+  color?: string;
+}) {
   const base = "absolute w-3.5 h-3.5 pointer-events-none";
   const corners = {
     tl: "-top-px -left-px border-t-2 border-l-2 rounded-tl-sm",
@@ -429,8 +539,11 @@ function BracketCorner({ pos }: { pos: "tl" | "tr" | "bl" | "br" }) {
   };
   return (
     <span
-      className={`${base} ${corners[pos]} border-emerald-300 animate-pulse`}
-      style={{ animationDuration: "2.4s" }}
+      className={`${base} ${corners[pos]} animate-pulse`}
+      style={{
+        animationDuration: "2.4s",
+        borderColor: color || "var(--color-primary-light)",
+      }}
     />
   );
 }
@@ -443,13 +556,18 @@ function TooltipArrow({
   placement,
   spotlightCenterX,
   cardLeft,
+  cardWidth,
+  borderColor,
 }: {
   placement: "top" | "bottom";
   spotlightCenterX: number;
   cardLeft: number;
+  cardWidth: number;
+  borderColor?: string;
 }) {
-  // Position the arrow horizontally to roughly point at the spotlight center
-  const arrowX = Math.max(16, Math.min(spotlightCenterX - cardLeft - 7, TOOLTIP_WIDTH - 32));
+  // Position the arrow horizontally to roughly point at the spotlight center within the card
+  const arrowX = Math.max(16, Math.min(spotlightCenterX - cardLeft - 7, Math.max(20, cardWidth - 32)));
+  const borderStyle = { borderColor: borderColor || "var(--color-primary-border)" };
 
   if (placement === "bottom") {
     // Arrow points UP (card is below the spotlight)
@@ -459,7 +577,8 @@ function TooltipArrow({
         className="absolute -top-[7px] w-3.5 h-3.5 overflow-hidden pointer-events-none"
       >
         <div
-          className="w-3 h-3 bg-[#131519] border-t border-l border-emerald-500/25 rotate-45 translate-x-0.5 translate-y-1"
+          style={borderStyle}
+          className="w-3 h-3 bg-[#131519] border-t border-l rotate-45 translate-x-0.5 translate-y-1"
         />
       </div>
     );
@@ -471,14 +590,15 @@ function TooltipArrow({
       className="absolute -bottom-[7px] w-3.5 h-3.5 overflow-hidden pointer-events-none"
     >
       <div
-        className="w-3 h-3 bg-[#131519] border-b border-r border-emerald-500/25 rotate-45 translate-x-0.5 -translate-y-1"
+        style={borderStyle}
+        className="w-3 h-3 bg-[#131519] border-b border-r rotate-45 translate-x-0.5 -translate-y-1"
       />
     </div>
   );
 }
 
 /** Tiny custom star-sparkle SVG to avoid any external icon lib for this detail */
-function SparkleIcon() {
+function SparkleIcon({ color }: { color?: string }) {
   return (
     <svg
       width="10"
@@ -486,7 +606,7 @@ function SparkleIcon() {
       viewBox="0 0 10 10"
       fill="none"
       aria-hidden="true"
-      className="text-emerald-400"
+      style={{ color: color || "var(--color-primary-light)" }}
     >
       <path
         d="M5 0.5L6.03 3.97L9.5 5L6.03 6.03L5 9.5L3.97 6.03L0.5 5L3.97 3.97L5 0.5Z"

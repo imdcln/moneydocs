@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { cleanNotificationText } from "@/lib/notificationUtils";
 
 type NotificationType = "SECURITY" | "BUDGET" | "SYSTEM" | "GENERAL" | "WALLET_INVITE";
 
@@ -379,13 +380,13 @@ export default function NotificationsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2 mb-0.5">
                     <p className="text-white font-semibold text-sm leading-tight truncate">
-                      {notif.title}
+                      {cleanNotificationText(notif.title)}
                     </p>
                     <span className="text-slate-500 text-[10px] flex-shrink-0">
                       {timeAgo(notif.createdAt)}
                     </span>
                   </div>
-                  <p className="text-slate-300 text-xs leading-relaxed">{notif.message}</p>
+                  <p className="text-slate-300 text-xs leading-relaxed">{cleanNotificationText(notif.message)}</p>
 
                   {/* Non-invite link */}
                   {notif.type !== "WALLET_INVITE" && notif.link && notif.link !== "/notifications" && (

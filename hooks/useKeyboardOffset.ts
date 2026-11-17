@@ -19,9 +19,10 @@ export function useKeyboardOffset() {
       // Calculate distance between bottom of visual viewport and bottom of layout window
       const offset = Math.max(0, window.innerHeight - (vv.height + (vv.offsetTop || 0)));
       // Viewport shifts under 60px are typically mobile URL bar / home indicator changes
-      setKeyboardHeight(offset > 60 ? offset : 0);
+      setKeyboardHeight(offset > 60 ? Math.round(offset) : 0);
     };
 
+    window.addEventListener("resize", handleResize);
     vv.addEventListener("resize", handleResize);
     vv.addEventListener("scroll", handleResize);
 
@@ -29,6 +30,7 @@ export function useKeyboardOffset() {
     handleResize();
 
     return () => {
+      window.removeEventListener("resize", handleResize);
       vv.removeEventListener("resize", handleResize);
       vv.removeEventListener("scroll", handleResize);
     };

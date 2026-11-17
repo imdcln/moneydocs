@@ -1,12 +1,21 @@
 import type { NextAuthConfig } from "next-auth";
 
 export const authConfig = {
+  trustHost: true,
   pages: {
     signIn: "/auth/signin",
   },
   callbacks: {
     authorized({ auth, request: { nextUrl } }) {
-      const isLoggedIn = !!auth?.user;
+      const now = Math.floor(Date.now() / 1000);
+      const sessionExpiry = (auth as { sessionExpiry?: number })?.sessionExpiry;
+      const stayLoggedIn = (auth as { stayLoggedIn?: boolean })?.stayLoggedIn;
+      const isExpired =
+        stayLoggedIn === false &&
+        typeof sessionExpiry === "number" &&
+        now > sessionExpiry;
+
+      const isLoggedIn = !!auth?.user && !isExpired;
       const isOnAuth = nextUrl.pathname.startsWith("/auth");
       const isPublic =
         nextUrl.pathname.startsWith("/api") ||
@@ -17,6 +26,13 @@ export const authConfig = {
         nextUrl.pathname.includes(".");
 
       if (isOnAuth) {
+        // If device was disconnected or an auth error occurred, do NOT bounce back to dashboard!
+        if (
+          nextUrl.searchParams.has("disconnected") ||
+          nextUrl.searchParams.has("error")
+        ) {
+          return true;
+        }
         if (isLoggedIn) {
           return Response.redirect(new URL("/", nextUrl));
         }

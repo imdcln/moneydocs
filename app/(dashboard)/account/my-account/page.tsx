@@ -9,7 +9,6 @@ import {
   RefreshCw,
   Smartphone,
   Monitor,
-  Key,
   Sliders,
   Trash2,
   LogOut,
@@ -31,6 +30,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { GoogleIcon } from "@/components/ui/AppIcons";
 import PageLoading from "@/components/ui/PageLoading";
 import { getClientDeviceId } from "@/lib/clientDevice";
+import LoginAndSecuritySection from "@/components/admin/LoginAndSecuritySection";
 
 interface Device {
   deviceId: string;
@@ -144,6 +144,10 @@ export default function MyAccountPage() {
   const [showOtpConfirmModal, setShowOtpConfirmModal] = useState(false);
   const [otpConfirmAction, setOtpConfirmAction] = useState<"enable" | "disable">("enable");
   const [authProvider, setAuthProvider] = useState<"credentials" | "google">("credentials");
+  const [userId, setUserId] = useState("");
+  const [hasPassword, setHasPassword] = useState(false);
+  const [isGoogleLinked, setIsGoogleLinked] = useState(false);
+  const [googleId, setGoogleId] = useState<string | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceCount, setDeviceCount] = useState(1);
   const [maxDevices, setMaxDevices] = useState(5);
@@ -151,7 +155,6 @@ export default function MyAccountPage() {
   const [pageLoading, setPageLoading] = useState(true);
 
   // Modals
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showProfileColorModal, setShowProfileColorModal] = useState(false);
@@ -180,14 +183,6 @@ export default function MyAccountPage() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
 
-  // Password Form
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordLoading, setPasswordLoading] = useState(false);
-  const [passwordError, setPasswordError] = useState("");
-  const [passwordSuccess, setPasswordSuccess] = useState("");
-
   // Action Loading
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -209,15 +204,19 @@ export default function MyAccountPage() {
       if (cachedImage) setUserImage(cachedImage);
     }
 
-    fetch("/api/finance/user")
+    fetch("/api/finance/user", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         if (d.user) {
+          if (d.user.id) setUserId(d.user.id);
           setUserName(d.user.name || "Declane");
           setUserEmail(d.user.email || "declanecun@gmail.com");
           setIsVerified(Boolean(d.user.isVerified));
           setEmailOtpEnabled(Boolean(d.user.emailOtpEnabled));
           setAuthProvider(d.user.authProvider || "credentials");
+          setHasPassword(Boolean(d.user.hasPassword));
+          setIsGoogleLinked(Boolean(d.user.isGoogleLinked));
+          setGoogleId(d.user.googleId || null);
           if (d.user.profileColor) {
             setProfileColor(d.user.profileColor);
             if (typeof window !== "undefined") {
@@ -277,17 +276,21 @@ export default function MyAccountPage() {
 
     const clientDeviceId = getClientDeviceId();
     Promise.all([
-      fetch("/api/finance/user").then((r) => r.json()).catch(() => ({})),
+      fetch("/api/finance/user", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
       fetch("/api/finance/user/devices", {
         headers: clientDeviceId ? { "x-device-id": clientDeviceId } : {},
       }).then((r) => r.json()).catch(() => ({})),
     ]).then(([userData, deviceData]) => {
       if (userData.user) {
+        if (userData.user.id) setUserId(userData.user.id);
         setUserName(userData.user.name || "Declane");
         setUserEmail(userData.user.email || "declanecun@gmail.com");
         setIsVerified(Boolean(userData.user.isVerified));
         setEmailOtpEnabled(Boolean(userData.user.emailOtpEnabled));
         setAuthProvider(userData.user.authProvider || "credentials");
+        setHasPassword(Boolean(userData.user.hasPassword));
+        setIsGoogleLinked(Boolean(userData.user.isGoogleLinked));
+        setGoogleId(userData.user.googleId || null);
         if (userData.user.profileColor) {
           setProfileColor(userData.user.profileColor);
           if (typeof window !== "undefined") {
@@ -310,6 +313,29 @@ export default function MyAccountPage() {
         setDeviceCount(deviceData.devices.length);
       }
       setPageLoading(false);
+
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("linked") === "google") {
+          toast("Google account connected successfully!", "success");
+          window.history.replaceState({}, "", window.location.pathname);
+          // Refresh page data so isVerified / isGoogleLinked update immediately
+          fetchUserData();
+          router.refresh();
+        } else if (params.get("error") === "GoogleAccountAlreadyLinkedToOther") {
+          toast("This Google account is already linked to another Money Docs account.", "error");
+          window.history.replaceState({}, "", window.location.pathname);
+        } else if (params.get("error") === "GoogleEmailMismatch") {
+          const expected = params.get("expected");
+          toast(
+            expected
+              ? `Google sign-in failed: the Google account email doesn't match your account email (${expected}). Please use the same email.`
+              : "Google sign-in failed: email mismatch. Use a Google account with the same email as your account.",
+            "error"
+          );
+          window.history.replaceState({}, "", window.location.pathname);
+        }
+      }
     });
 
     return () => {
@@ -382,44 +408,6 @@ export default function MyAccountPage() {
       setVerifyError("Network error. Please try again.");
     } finally {
       setVerifyLoading(false);
-    }
-  };
-
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newPassword.length < 6) {
-      setPasswordError("New password must be at least 6 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPasswordError("New passwords do not match.");
-      return;
-    }
-
-    setPasswordLoading(true);
-    setPasswordError("");
-    setPasswordSuccess("");
-
-    try {
-      const res = await fetch("/api/finance/user/change-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPasswordSuccess("Password updated successfully!");
-        setCurrentPassword("");
-        setNewPassword("");
-        setConfirmPassword("");
-        setTimeout(() => setShowPasswordModal(false), 1500);
-      } else {
-        setPasswordError(data.error || "Failed to update password.");
-      }
-    } catch {
-      setPasswordError("Network error.");
-    } finally {
-      setPasswordLoading(false);
     }
   };
 
@@ -657,11 +645,12 @@ export default function MyAccountPage() {
           </h2>
           <p className="text-slate-400 text-xs mt-0.5">{userEmail}</p>
 
-          {/* Account Status Badge: Google Icon or Verified / Unverified */}
+          {/* Account Status Badge */}
           <div className="mt-2.5 flex items-center justify-center">
-            {authProvider === "google" ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/6 border border-white/10 text-slate-200 text-xs font-medium shadow-sm">
+            {(isGoogleLinked || authProvider === "google") ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-xs font-medium shadow-sm">
                 <GoogleIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>Verified</span>
               </span>
             ) : isVerified ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-xs font-medium shadow-sm">
@@ -782,6 +771,33 @@ export default function MyAccountPage() {
           </div>
         </div>
 
+        {/* Login & Security Section */}
+        <div id="security" className="scroll-mt-4">
+          <LoginAndSecuritySection
+            user={{
+              id: userId,
+              name: userName,
+              email: userEmail,
+              hasPassword,
+              isGoogleLinked,
+              googleId,
+              authProvider,
+              isVerified,
+              emailOtpEnabled,
+            }}
+            onRefresh={fetchUserData}
+            onTriggerOtpToggle={() => {
+              setOtpConfirmAction(emailOtpEnabled ? "disable" : "enable");
+              setShowOtpConfirmModal(true);
+            }}
+            otpToggleLoading={otpToggleLoading}
+            onVerifyEmail={() => {
+              setShowVerifyModal(true);
+              if (!codeSent && resendCooldown === 0) handleSendVerificationCode();
+            }}
+          />
+        </div>
+
         {/* Account Management Section */}
         <div className="space-y-2">
           <span className="text-slate-400 text-xs font-semibold px-1 block">Account &amp; Appearance</span>
@@ -850,74 +866,6 @@ export default function MyAccountPage() {
                 </span>
               </button>
             )}
-
-            {/* Email OTP Toggle — only for verified credentials users */}
-            {authProvider !== "google" && isVerified && (
-              <div className="w-full flex items-center justify-between p-4 hover:bg-white/3 transition-colors">
-                <div className="flex items-center gap-3.5">
-                  <div
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${!emailOtpEnabled ? "bg-slate-800" : ""}`}
-                    style={
-                      emailOtpEnabled
-                        ? {
-                            backgroundColor: currentColor.subtle,
-                            color: currentColor.primaryLight,
-                            border: `1px solid ${currentColor.border}`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <Mail
-                      className={`w-4 h-4 ${!emailOtpEnabled ? "text-slate-300" : ""}`}
-                      style={emailOtpEnabled ? { color: currentColor.primaryLight } : undefined}
-                    />
-                  </div>
-                  <div>
-                    <span className="text-white font-medium text-sm">Email OTP Login</span>
-                    <p
-                      className="text-[11px] mt-0.5 text-slate-400"
-                      style={emailOtpEnabled ? { color: currentColor.primaryLight } : undefined}
-                    >
-                      {emailOtpEnabled
-                        ? "6-digit code required on login"
-                        : "No code required on login"}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={otpToggleLoading}
-                  onClick={() => {
-                    setOtpConfirmAction(emailOtpEnabled ? "disable" : "enable");
-                    setShowOtpConfirmModal(true);
-                  }}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 disabled:opacity-40 cursor-pointer ${
-                    emailOtpEnabled ? "" : "bg-slate-700"
-                  }`}
-                  style={emailOtpEnabled ? { backgroundColor: currentColor.primary } : undefined}
-                  aria-label="Toggle Email OTP"
-                  role="switch"
-                  aria-checked={emailOtpEnabled}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
-                      emailOtpEnabled ? "translate-x-6" : "translate-x-1"
-                    }`}
-                  />
-                </button>
-              </div>
-            )}
-
-            {/* Change Password */}
-            <button
-              onClick={() => setShowPasswordModal(true)}
-              className="w-full flex items-center gap-3.5 p-4 hover:bg-white/3 transition-colors text-left cursor-pointer"
-            >
-              <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-slate-300">
-                <Key className="w-4 h-4" />
-              </div>
-              <span className="text-white font-medium text-sm">Change password</span>
-            </button>
 
             {/* Reset Account */}
             <button
@@ -1116,78 +1064,6 @@ export default function MyAccountPage() {
         </div>
       )}
 
-      {/* Change Password Modal */}
-      {showPasswordModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm bg-[#16181e] border border-white/10 rounded-3xl p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-white font-bold text-base">Change Password</h3>
-              <button
-                onClick={() => setShowPasswordModal(false)}
-                className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleChangePassword} className="space-y-3">
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">Current Password</label>
-                <input
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="w-full bg-[#20222a] border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none"
-                  placeholder="Enter current password"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">New Password (min 6 characters)</label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full bg-[#20222a] border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none"
-                  placeholder="Enter new password"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">Confirm New Password</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full bg-[#20222a] border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none"
-                  placeholder="Confirm new password"
-                />
-              </div>
-
-              {passwordError && <p className="text-red-400 text-xs">{passwordError}</p>}
-              {passwordSuccess && (
-                <p style={{ color: currentColor.primaryLight }} className="text-xs flex items-center gap-1 font-semibold">
-                  <Check className="w-3.5 h-3.5" />
-                  {passwordSuccess}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={passwordLoading}
-                className="w-full py-3 rounded-full text-white font-bold text-xs tracking-wide transition-all disabled:opacity-50 cursor-pointer shadow-lg active:scale-98"
-                style={{
-                  backgroundColor: currentColor.primary,
-                  boxShadow: `0 8px 20px -4px ${currentColor.glow}`,
-                }}
-              >
-                {passwordLoading ? "Updating…" : "Update Password"}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Reset Account Confirmation Modal */}
       {showResetModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
@@ -1203,23 +1079,29 @@ export default function MyAccountPage() {
             </div>
 
             {/* Password input verification */}
-            <div className="space-y-1.5 pt-1">
-              <label className="text-[11px] text-slate-400 block font-medium">
-                Enter your password to confirm:
-              </label>
-              <input
-                type="password"
-                value={resetPassword}
-                onChange={(e) => {
-                  setResetPassword(e.target.value);
-                  setResetError("");
-                }}
-                placeholder="Account password"
-                className="w-full bg-[#20222a] border border-white/10 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
-                autoFocus
-              />
-              {resetError && <p className="text-red-400 text-[11px] mt-1">{resetError}</p>}
-            </div>
+            {hasPassword ? (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[11px] text-slate-400 block font-medium">
+                  Enter your password to confirm:
+                </label>
+                <input
+                  type="password"
+                  value={resetPassword}
+                  onChange={(e) => {
+                    setResetPassword(e.target.value);
+                    setResetError("");
+                  }}
+                  placeholder="Account password"
+                  className="w-full bg-[#20222a] border border-white/10 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
+                  autoFocus
+                />
+                {resetError && <p className="text-red-400 text-[11px] mt-1">{resetError}</p>}
+              </div>
+            ) : (
+              <p className="text-[11px] text-amber-300/80 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
+                Authenticated via Google. Click below when the countdown finishes to confirm account reset.
+              </p>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button
@@ -1230,7 +1112,7 @@ export default function MyAccountPage() {
               </button>
               <button
                 onClick={handleResetAccount}
-                disabled={resetCountdown > 0 || !resetPassword.trim() || actionLoading}
+                disabled={resetCountdown > 0 || (hasPassword && !resetPassword.trim()) || actionLoading}
                 className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 {actionLoading
@@ -1259,23 +1141,29 @@ export default function MyAccountPage() {
             </div>
 
             {/* Password input verification */}
-            <div className="space-y-1.5 pt-1">
-              <label className="text-[11px] text-slate-400 block font-medium">
-                Enter your password to confirm:
-              </label>
-              <input
-                type="password"
-                value={deletePassword}
-                onChange={(e) => {
-                  setDeletePassword(e.target.value);
-                  setDeleteError("");
-                }}
-                placeholder="Account password"
-                className="w-full bg-[#20222a] border border-white/10 focus:border-red-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
-                autoFocus
-              />
-              {deleteError && <p className="text-red-400 text-[11px] mt-1">{deleteError}</p>}
-            </div>
+            {hasPassword ? (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[11px] text-slate-400 block font-medium">
+                  Enter your password to confirm:
+                </label>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value);
+                    setDeleteError("");
+                  }}
+                  placeholder="Account password"
+                  className="w-full bg-[#20222a] border border-white/10 focus:border-red-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
+                  autoFocus
+                />
+                {deleteError && <p className="text-red-400 text-[11px] mt-1">{deleteError}</p>}
+              </div>
+            ) : (
+              <p className="text-[11px] text-red-300/80 bg-red-500/10 border border-red-500/20 rounded-xl p-2.5">
+                Authenticated via Google. Click below when the countdown finishes to permanently delete your account.
+              </p>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button
@@ -1286,7 +1174,7 @@ export default function MyAccountPage() {
               </button>
               <button
                 onClick={handleDeleteAccount}
-                disabled={deleteCountdown > 0 || !deletePassword.trim() || actionLoading}
+                disabled={deleteCountdown > 0 || (hasPassword && !deletePassword.trim()) || actionLoading}
                 className="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 {actionLoading
