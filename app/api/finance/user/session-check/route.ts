@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/models/User";
+import { clearAllAuthCookies } from "@/lib/authCookies";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -16,10 +17,12 @@ export async function GET(req: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user?.email) {
-      return NextResponse.json(
+      const res = NextResponse.json(
         { valid: false, reason: "UNAUTHENTICATED" },
         { status: 401, headers: NO_CACHE_HEADERS }
       );
+      clearAllAuthCookies(res);
+      return res;
     }
 
     const { searchParams } = new URL(req.url);
@@ -58,7 +61,7 @@ export async function GET(req: NextRequest) {
 
       if (!match) {
         // Device was disconnected by another session or evicted!
-        return NextResponse.json(
+        const res = NextResponse.json(
           {
             valid: false,
             reason: "DEVICE_DISCONNECTED",
@@ -66,6 +69,8 @@ export async function GET(req: NextRequest) {
           },
           { status: 401, headers: NO_CACHE_HEADERS }
         );
+        clearAllAuthCookies(res);
+        return res;
       }
 
       // Update last active if older than 2 minutes

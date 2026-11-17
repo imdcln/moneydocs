@@ -59,13 +59,18 @@ export async function POST(
     return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
   }
 
-  if (String(tx.userId) !== String(userId) && tx.walletId) {
+  const isOwnerOfTx = String(tx.userId) === String(userId);
+  if (!isOwnerOfTx) {
+    if (!tx.walletId) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+    }
     const txWallet = await Wallet.findById(tx.walletId).lean();
     const perms = getUserWalletPermissions(txWallet as any, userEmail, userId);
     if (!perms.transactions.update) {
       return NextResponse.json({ error: "You do not have permission to record payments for this debt" }, { status: 403 });
     }
   }
+
 
   const wallet = await Wallet.findById(walletId);
   if (!wallet) {

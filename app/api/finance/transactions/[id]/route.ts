@@ -152,25 +152,33 @@ export async function PATCH(
 
     // 2. Apply new delta to new wallet
     if (newWalletId) {
-      const newWallet = await Wallet.findById(newWalletId).select("currency").lean();
-      if (newWallet) {
-        const newWalletCurrency = (newWallet as { currency?: string }).currency || "IDR";
-        const newAmtInWalletCurr = convertCurrency(
-          newAmount,
-          newCurrency,
-          newWalletCurrency,
-          usdRates
-        );
+      const newWallet = await Wallet.findById(newWalletId).lean();
+      if (!newWallet) {
+        return NextResponse.json({ error: "Wallet not found" }, { status: 404 });
+      }
+      const newPerms = getUserWalletPermissions(newWallet as any, userEmail, userId);
+      if (!newPerms.transactions.create && !newPerms.transactions.update) {
+        return NextResponse.json({ error: "You do not have permission to assign transactions to this wallet" }, { status: 403 });
+      }
+      const newWalletCurrency = (newWallet as { currency?: string }).currency || "IDR";
+      const newAmtInWalletCurr = convertCurrency(
+        newAmount,
+        newCurrency,
+        newWalletCurrency,
+        usdRates
+      );
         const nextCategory = body.category !== undefined ? body.category : oldTx.category;
         const nextSubCategory = body.subCategory !== undefined ? body.subCategory : oldTx.subCategory;
         const newIsLoan = isLoanCategory(nextCategory, nextSubCategory);
+        const hasExistingPayments = oldTx.debtPayments && Array.isArray(oldTx.debtPayments) && oldTx.debtPayments.length > 0;
+        const skipExpenseDelta = oldTx.type === "DEBT" && newType === "EXPENSE" && hasExistingPayments;
         const applyDelta =
+          skipExpenseDelta ? 0 :
           newType === "INCOME" || (newType === "DEBT" && newIsLoan) ? newAmtInWalletCurr :
           newType === "EXPENSE" ? -newAmtInWalletCurr : 0;
         if (applyDelta !== 0) {
           await Wallet.findByIdAndUpdate(newWalletId, { $inc: { balance: applyDelta } });
         }
-      }
     }
 
     updates.amount = newAmount;
@@ -306,7 +314,9 @@ export async function DELETE(
 
   const usdRates = await getExchangeRates("USD");
 
-  if (tx.walletId) {
+  const hasDebtPayments = tx.debtPayments && Array.isArray(tx.debtPayments) && tx.debtPayments.length > 0;
+
+  if (tx.walletId && !hasDebtPayments) {
     const wallet = await Wallet.findById(tx.walletId).select("currency").lean();
     if (wallet) {
       const walletCurrency = (wallet as { currency?: string }).currency || "IDR";
@@ -327,8 +337,8 @@ export async function DELETE(
   }
 
   // Refund any payments made from wallets for this debt/loan
-  if (tx.debtPayments && Array.isArray(tx.debtPayments)) {
-    for (const p of tx.debtPayments) {
+  if (hasDebtPayments) {
+    for (const p of tx.debtPayments!) {
       if (p.walletId && p.amount > 0) {
         const pWallet = await Wallet.findById(p.walletId).select("currency").lean();
         if (pWallet) {

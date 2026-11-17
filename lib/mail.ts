@@ -50,7 +50,7 @@ export async function sendVerificationEmail({
         pass,
       },
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: process.env.SMTP_IGNORE_TLS === "true" ? false : process.env.NODE_ENV === "production",
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,

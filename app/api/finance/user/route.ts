@@ -2,6 +2,7 @@
 import { auth } from "@/lib/auth";
 import { connectDB } from "@/lib/mongoose";
 import User from "@/models/User";
+import Account, { IAccount } from "@/models/Account";
 
 export async function GET() {
   try {
@@ -11,23 +12,40 @@ export async function GET() {
     }
 
     await connectDB();
-    const user = await User.findOne({ email: session.user.email }).lean();
+    const user = await User.findOne({ email: session.user.email }).select("+password +passwordHash").lean();
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    const authProvider = user.authProvider || (user.googleId ? "google" : "credentials");
+    const rawUserId = String((user as { _id: unknown })._id);
+    const accounts = (await Account.find({ userId: rawUserId }).lean()) as unknown as IAccount[];
+    const hasPassword = Boolean((user as { passwordHash?: string; password?: string }).passwordHash || (user as { password?: string }).password);
+    const googleAccount = accounts.find((a) => a.provider === "google");
+    const isGoogleLinked = Boolean(user.googleId || googleAccount);
+    const canUnlinkGoogle = hasPassword;
+    const canRemovePassword = isGoogleLinked;
+
+    const authProvider = user.authProvider || (isGoogleLinked ? "google" : "credentials");
     // Google accounts are inherently verified; simple auth accounts check isVerified flag
     const isVerified = authProvider === "google" ? true : Boolean(user.isVerified);
 
     const userRes = NextResponse.json({
       user: {
-        id: String((user as { _id: unknown })._id),
+        id: rawUserId,
         name: user.name,
         email: user.email,
         image: user.image,
         authProvider,
         isVerified,
+        hasPassword,
+        isGoogleLinked,
+        googleId: user.googleId || googleAccount?.providerAccountId || null,
+        canUnlinkGoogle,
+        canRemovePassword,
+        accounts: accounts.map((a) => ({
+          provider: a.provider,
+          providerAccountId: a.providerAccountId,
+        })),
         emailOtpEnabled: Boolean(user.emailOtpEnabled),
         baseCurrency: user.baseCurrency || "IDR",
         hasCompletedOnboarding: Boolean(user.hasCompletedOnboarding),

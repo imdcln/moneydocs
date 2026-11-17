@@ -51,6 +51,7 @@ import { CalendarIcon, CustomDatePicker } from "@/components/ui/AppIcons";
 import WithPeopleModal from "@/components/admin/WithPeopleModal";
 import SelectEventModal, { EventOption } from "@/components/admin/SelectEventModal";
 import PageLoading from "@/components/ui/PageLoading";
+import ConvertDebtModal from "@/components/transactions/ConvertDebtModal";
 
 interface Wallet {
   _id: string;
@@ -145,6 +146,7 @@ export default function TransactionDetailPage({
   const [isPayKeypadOpen, setIsPayKeypadOpen] = useState(false);
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
+  const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
   const payWalletDropdownRef = useRef<HTMLDivElement>(null);
 
   // Amount popup state
@@ -186,9 +188,7 @@ export default function TransactionDetailPage({
   const [editWalletDropdownOpen, setEditWalletDropdownOpen] = useState(false);
   const editWalletDropdownRef = useRef<HTMLDivElement>(null);
   const keyboardHeight = useKeyboardOffset();
-  const [isEditScrolledDown, setIsEditScrolledDown] = useState(false);
   const editScrollContainerRef = useRef<HTMLDivElement>(null);
-  const editFocusScrollTopRef = useRef(0);
   const [editIsKeypadOpen, setEditIsKeypadOpen] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [navigatingToEvents, setNavigatingToEvents] = useState(false);
@@ -350,17 +350,6 @@ export default function TransactionDetailPage({
       setEditRawAmount(safeEvaluateMath(editRawAmount));
     }
     setEditIsKeypadOpen(false);
-  };
-
-  const handleEditScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const currentScrollTop = e.currentTarget.scrollTop;
-    if (isEditDescFocused) {
-      if (currentScrollTop - editFocusScrollTopRef.current > 30) {
-        setIsEditScrolledDown(true);
-      } else if (currentScrollTop - editFocusScrollTopRef.current <= 10) {
-        setIsEditScrolledDown(false);
-      }
-    }
   };
 
   // ── Keyboard listener for Full Edit Modal Keypad ───────────────────────────
@@ -600,6 +589,15 @@ export default function TransactionDetailPage({
         setIsPaymentModalOpen(false);
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("transaction-added"));
+        }
+
+        const updatedRepaid = Number(data.transaction?.debtRepaidAmount) || 0;
+        const remaining = Math.max(0, (data.transaction?.amount || 0) - updatedRepaid);
+        const isNowFullyPaid = !isLoan && (remaining <= 0 || data.transaction?.debtStatus === "PAID");
+        if (isNowFullyPaid) {
+          setTimeout(() => {
+            setIsConvertModalOpen(true);
+          }, 350);
         }
       } else {
         const err = await res.json();
@@ -1177,7 +1175,7 @@ export default function TransactionDetailPage({
                   >
                     <span>{formatMoney(transaction.amount, transaction.currency)}</span>
                     {isFullyPaid && (
-                      <span className="no-underline inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      <span className="no-underline inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] border border-[var(--color-primary-border)]">
                         <Check className="w-3.5 h-3.5" />
                         <span>{isLoan ? "Fully Returned" : "Fully Paid"}</span>
                       </span>
@@ -1296,7 +1294,7 @@ export default function TransactionDetailPage({
                   <div className="flex items-center gap-1.5 font-bold text-slate-300">
                     <span>{isLoan ? "Loan Return Progress" : "Debt Repayment Progress"}</span>
                     {isFullyPaid && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] border border-[var(--color-primary-border)]">
                         <Check className="w-3 h-3" />
                         <span>{isLoan ? "Fully Returned" : "Fully Paid"}</span>
                       </span>
@@ -1313,13 +1311,14 @@ export default function TransactionDetailPage({
                     initial={{ width: 0 }}
                     animate={{ width: `${progressPercent}%` }}
                     transition={{ duration: 0.5, ease: "easeOut" }}
-                    className={`h-full rounded-full ${
-                      isFullyPaid
-                        ? "bg-gradient-to-r from-emerald-500 to-teal-400"
-                        : isLoan
-                        ? "bg-gradient-to-r from-amber-500 to-emerald-400"
-                        : "bg-gradient-to-r from-emerald-500 to-[var(--color-primary)]"
-                    }`}
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      background: isLoan
+                        ? "linear-gradient(90deg, #f59e0b, var(--color-primary))"
+                        : "var(--color-primary-gradient, var(--color-primary))",
+                      backgroundColor: "var(--color-primary)",
+                      boxShadow: progressPercent > 0 ? "0 0 10px var(--color-primary-glow)" : "none",
+                    }}
                   />
                 </div>
 
@@ -1337,7 +1336,7 @@ export default function TransactionDetailPage({
                       className={
                         remainingDebt > 0
                           ? "text-amber-400 font-semibold"
-                          : "text-emerald-400 font-semibold"
+                          : "text-[var(--color-primary-light)] font-semibold"
                       }
                     >
                       {formatMoney(remainingDebt, transaction.currency)}
@@ -1345,6 +1344,27 @@ export default function TransactionDetailPage({
                   </span>
                 </div>
               </div>
+
+              {/* Fully Paid Debt Conversion Banner */}
+              {isDebt && isFullyPaid && canUpdateTx && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-[var(--color-primary-subtle)] via-white/[0.02] to-transparent border border-[var(--color-primary-border)] space-y-2.5">
+                  <div className="flex items-center gap-2 text-[var(--color-primary-light)]">
+                    <Sparkles className="w-4 h-4 flex-shrink-0" />
+                    <p className="text-xs font-bold">Debt Fully Repaid!</p>
+                  </div>
+                  <p className="text-[11px] text-slate-300">
+                    Debt is fully paid. Convert it to a standard expense transaction.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsConvertModalOpen(true)}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-[var(--color-primary)] hover:brightness-110 text-white transition-all flex items-center justify-center gap-2 shadow-lg shadow-[var(--color-primary-glow)] cursor-pointer active:scale-[0.99]"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Convert to Expense Transaction</span>
+                  </button>
+                </div>
+              )}
 
               {/* Action Button: "Pay Debt" or "Return Money" */}
               {canUpdateTx && (
@@ -1407,7 +1427,7 @@ export default function TransactionDetailPage({
                         className="p-3.5 bg-[#16171d] border border-white/6 rounded-2xl flex items-center justify-between gap-3 group hover:border-white/10 transition-colors"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                          <div className="w-9 h-9 rounded-xl bg-[var(--color-primary-subtle)] border border-[var(--color-primary-border)] text-[var(--color-primary-light)] flex items-center justify-center flex-shrink-0">
                             <Check className="w-4 h-4" />
                           </div>
                           <div className="min-w-0">
@@ -1427,7 +1447,7 @@ export default function TransactionDetailPage({
                         </div>
 
                         <div className="flex items-center gap-3 flex-shrink-0">
-                          <span className="text-sm font-extrabold text-emerald-400">
+                          <span className="text-sm font-extrabold text-[var(--color-primary-light)]">
                             +{formatMoney(payment.amount, payment.currency || transaction.currency)}
                           </span>
                           <button
@@ -1541,29 +1561,28 @@ export default function TransactionDetailPage({
       {/* ── Full Edit Transaction Modal (Picture 3 Overlay) ────────────────── */}
       <AnimatePresence>
         {isEditModalOpen && (
-          <div ref={editScrollContainerRef} onScroll={handleEditScroll} className="fixed inset-0 z-[80] bg-[#111216] text-white overflow-y-auto">
+          <div className="fixed inset-0 z-[80] bg-[#111216] text-white flex flex-col overflow-hidden">
             <motion.div
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 28, stiffness: 320 }}
-              className="max-w-lg mx-auto min-h-screen flex flex-col justify-between pb-8"
+              className="max-w-lg mx-auto w-full h-full flex flex-col justify-between overflow-hidden"
             >
-              <div>
-                {/* Top Bar matching Picture 3 */}
-                <div className="flex items-center gap-4 px-5 pt-4 pb-3 border-b border-white/6">
-                  <button
-                    onClick={() => { setIsEditModalOpen(false); setEditIsKeypadOpen(false); }}
-                    disabled={savingEdit}
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-slate-300 hover:text-white"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
-                  <h2 className="text-white text-lg font-bold">Edit transaction</h2>
-                </div>
+              {/* Top Bar matching Picture 3 */}
+              <div className="flex items-center gap-4 px-5 pt-4 pb-3 border-b border-white/6 flex-shrink-0">
+                <button
+                  onClick={() => { setIsEditModalOpen(false); setEditIsKeypadOpen(false); }}
+                  disabled={savingEdit}
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-slate-300 hover:text-white"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+                <h2 className="text-white text-lg font-bold">Edit transaction</h2>
+              </div>
 
-                {/* Form Rows matching Picture 3 */}
-                <div className="px-5 pt-3 space-y-5">
+              {/* Form Rows matching Picture 3 — scrollable body */}
+              <div ref={editScrollContainerRef} className="flex-1 overflow-y-auto px-5 pt-3 space-y-5 pb-6">
                   {/* Row 1: Wallet Selector */}
                   <div className="flex items-center justify-between py-2 border-b border-white/6">
                     <div className="flex items-center gap-4">
@@ -1698,13 +1717,10 @@ export default function TransactionDetailPage({
                         onFocus={() => {
                           setEditIsKeypadOpen(false);
                           setIsEditDescFocused(true);
-                          setIsEditScrolledDown(false);
-                          editFocusScrollTopRef.current = editScrollContainerRef.current?.scrollTop || 0;
                         }}
                         onBlur={() => {
                           setTimeout(() => {
                             setIsEditDescFocused(false);
-                            setIsEditScrolledDown(false);
                           }, 200);
                         }}
                         onKeyDown={(e) => {
@@ -1918,49 +1934,21 @@ export default function TransactionDetailPage({
                     </button>
                   </div>
                 </div>
-              </div>
 
-                            {/* Floating Save Footer for Edit Transaction */}
-              <AnimatePresence>
-                {isEditDescFocused && !isEditScrolledDown && (
-                  <motion.div
-                    key="edit-floating-save-bar"
-                    initial={{ opacity: 0, y: 25, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 15, scale: 0.95 }}
-                    transition={{ type: "spring", damping: 26, stiffness: 360 }}
-                    style={{
-                      bottom: keyboardHeight > 0 ? `${keyboardHeight + 12}px` : "16px",
-                    }}
-                    className="fixed left-4 right-4 max-w-lg mx-auto z-[85] bg-[#1a1c24]/95 backdrop-blur-xl border border-white/12 shadow-[0_16px_40px_rgba(0,0,0,0.65)] rounded-2xl p-2.5 flex items-center gap-2.5"
-                  >
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleSaveFullEdit}
-                      disabled={savingEdit}
-                      className="w-full py-3.5 px-4 rounded-xl bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                      style={{ boxShadow: "0 4px 14px var(--color-primary-glow)" }}
-                    >
-                      <Check className="w-4 h-4 stroke-[2.5]" />
-                      <span>{savingEdit ? "Saving…" : "Save"}</span>
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Bottom Green Save Button — sticks back when scrolled */}
+              {/* Footer Save Button — sits above device keyboard when open */}
               <div
-                className={`px-5 pt-6 transition-opacity duration-200 ${
-                  isEditDescFocused && !isEditScrolledDown ? "opacity-0 pointer-events-none" : "opacity-100"
-                }`}
+                style={{
+                  marginBottom: keyboardHeight > 0 ? `${keyboardHeight}px` : undefined,
+                }}
+                className="px-5 py-3.5 border-t border-white/8 bg-[#111216] flex-shrink-0 transition-[margin] duration-150 ease-out"
               >
                 <button
                   type="button"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={handleSaveFullEdit}
                   disabled={savingEdit}
-                  className="w-full py-4 rounded-full bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-base shadow-xl active:scale-[0.99] transition-all disabled:opacity-50 cursor-pointer"
-                  style={{ boxShadow: "0 8px 24px -4px var(--color-primary-glow)" }}
+                  className="w-full py-3.5 rounded-full bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-base shadow-xl active:scale-[0.99] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  style={{ boxShadow: "0 6px 20px -4px var(--color-primary-glow)" }}
                 >
                   {savingEdit ? "Saving…" : "Save"}
                 </button>
@@ -2361,7 +2349,7 @@ export default function TransactionDetailPage({
                   {/* Party & Remaining Info Card */}
                   <div className="p-4 bg-[#161720] border border-white/8 rounded-2xl flex items-center justify-between shadow-sm">
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-11 h-11 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-bold text-lg flex-shrink-0">
+                      <div className="w-11 h-11 rounded-full bg-[var(--color-primary-subtle)] border border-[var(--color-primary-border)] text-[var(--color-primary-light)] flex items-center justify-center font-bold text-lg flex-shrink-0">
                         {partyInitial}
                       </div>
                       <div className="min-w-0">
@@ -2720,6 +2708,21 @@ export default function TransactionDetailPage({
           </div>
         )}
       </AnimatePresence>
+      {/* ── Convert Paid Debt to Expense Modal ─────────────────────────────── */}
+      {transaction && (
+        <ConvertDebtModal
+          isOpen={isConvertModalOpen}
+          onClose={() => setIsConvertModalOpen(false)}
+          transaction={transaction as any}
+          onConverted={(updatedTx) => {
+            setTransaction(updatedTx);
+            toast("Debt successfully converted to expense transaction!", "success");
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new Event("transaction-added"));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

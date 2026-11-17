@@ -10,6 +10,7 @@ import EventModel from "@/models/Event";
 import { getExchangeRates, convertToIDR, convertCurrency } from "@/lib/currency";
 import { isLoanCategory } from "@/lib/categories";
 import { createAndSendNotification } from "@/lib/notifications";
+import { getBudgetDisplayName } from "@/lib/budgetUtils";
 import { getRunningBudgetsQuery, isTransactionMatchingBudget } from "@/lib/budgetServer";
 import { notifyWalletTransactionActivity } from "@/lib/walletNotifications";
 import { getUserWalletPermissions } from "@/lib/walletPermissions";
@@ -164,15 +165,18 @@ export async function POST(req: NextRequest) {
     if (walletId.match(/^[0-9a-fA-F]{24}$/)) {
       validWalletId = walletId;
       const targetWallet = await Wallet.findById(validWalletId).lean();
-      if (targetWallet) {
-        const perms = getUserWalletPermissions(targetWallet as any, session?.user?.email, userId);
-        if (!perms.transactions.create) {
-          return NextResponse.json(
-            { error: "You do not have permission to create transactions in this wallet" },
-            { status: 403 }
-          );
-        }
+      if (!targetWallet) {
+        return NextResponse.json({ error: "Selected wallet was not found" }, { status: 404 });
       }
+      const perms = getUserWalletPermissions(targetWallet as any, session?.user?.email, userId);
+      if (!perms.transactions.create) {
+        return NextResponse.json(
+          { error: "You do not have permission to create transactions in this wallet" },
+          { status: 403 }
+        );
+      }
+    } else {
+      return NextResponse.json({ error: "Invalid wallet ID format" }, { status: 400 });
     }
   }
 
@@ -333,19 +337,14 @@ async function checkBudgetAlerts(
             100
           : 0;
 
-      const categoryLabel =
-        budget.subCategory
-          ? `${budget.category} â€º ${budget.subCategory}`
-          : budget.category === "ALL_CATEGORIES" || budget.category === "ALL"
-          ? "All Categories"
-          : budget.category;
+      const categoryLabel = getBudgetDisplayName(budget);
 
       // Alert at 80% (only once per crossing)
       if (percent >= 80 && prevPercent < 80 && percent < 100) {
         createAndSendNotification({
           userId,
           type: "BUDGET",
-          title: "Budget Warning âš ï¸",
+          title: "Budget Warning ⚠️",
           message: `You've spent ${Math.round(percent)}% of your "${categoryLabel}" budget for this month.`,
           link: "/budgets",
           metadata: { budgetId: String((budget as { _id: unknown })._id), percent: Math.round(percent) },
@@ -410,7 +409,9 @@ export async function DELETE(req: NextRequest) {
   const usdRates = await getExchangeRates("USD");
 
   for (const tx of txs) {
-    if (tx.walletId) {
+    const hasDebtPayments = tx.debtPayments && Array.isArray(tx.debtPayments) && tx.debtPayments.length > 0;
+
+    if (tx.walletId && !hasDebtPayments) {
       // Reversal: If it was EXPENSE, add back. If it was INCOME or LOAN, deduct.
       // Delta must be in the wallet's OWN currency, not IDR.
       const wallet = await Wallet.findById(tx.walletId).select("currency").lean();
@@ -428,8 +429,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     // Refund any debt/loan repayments made from wallets
-    if (tx.debtPayments && Array.isArray(tx.debtPayments)) {
-      for (const p of tx.debtPayments) {
+    if (hasDebtPayments) {
+      for (const p of tx.debtPayments!) {
         if (p.walletId && p.amount > 0) {
           const pWallet = await Wallet.findById(p.walletId).select("currency").lean();
           if (pWallet) {

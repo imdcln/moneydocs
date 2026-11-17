@@ -23,6 +23,7 @@ import {
   ChevronRight,
   AlertTriangle,
   Lock,
+  Sparkles,
 } from "lucide-react";
 import {
   formatMoney,
@@ -53,6 +54,7 @@ import PageLoading from "@/components/ui/PageLoading";
 import { getCache, setCache, CACHE_KEYS, CACHE_TTL } from "@/lib/clientCache";
 import OnboardingSpotlight, { SpotlightStep } from "@/components/transactions/OnboardingSpotlight";
 import ConfettiEffect from "@/components/transactions/ConfettiEffect";
+import ConvertDebtModal from "@/components/transactions/ConvertDebtModal";
 
 const ONBOARDING_STEPS: SpotlightStep[] = [
   {
@@ -74,14 +76,14 @@ const ONBOARDING_STEPS: SpotlightStep[] = [
     title: "Cashflow & Financial Reports",
     description:
       "📊 Track net savings with live Inflow vs. Outflow metrics. Tap 'View report for this period' to open detailed visual analytics and category breakdowns.",
-    preferredPlacement: "top",
+    preferredPlacement: "bottom",
   },
   {
     targetId: "spotlight-transactions-list",
     title: "Activity Feed & Actions",
     description:
       "🎯 Your transactions are categorized automatically. Issue warnings highlight items needing attention. Use the ⋯ menu to transfer funds or bulk-manage entries.",
-    preferredPlacement: "top",
+    preferredPlacement: "bottom",
   },
 ];
 
@@ -397,11 +399,34 @@ export default function TransactionsPage() {
 
   const periodTabs = useMemo(() => generatePeriodTabs(timeRangeUnit), [timeRangeUnit]);
   const activeTabRef = useRef<HTMLButtonElement>(null);
+  const tabsContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll active tab into center on mount or when unit changes
+  // Auto-scroll tabs container: on open / mount or when "THIS MONTH" / "FUTURE" is selected,
+  // scroll to the end so "FUTURE" tab is seen. If a past period is selected, center that tab.
   useEffect(() => {
-    activeTabRef.current?.scrollIntoView({ inline: "center", behavior: "smooth" });
-  }, [timeRangeUnit, selectedPeriodId]);
+    if (loading && transactions.length === 0) return;
+
+    if (selectedPeriodId === "offset_0" || selectedPeriodId === "offset_1") {
+      const scrollToEnd = () => {
+        if (tabsContainerRef.current) {
+          tabsContainerRef.current.scrollTo({
+            left: tabsContainerRef.current.scrollWidth,
+            behavior: "smooth",
+          });
+        }
+      };
+
+      scrollToEnd();
+      const t1 = setTimeout(scrollToEnd, 50);
+      const t2 = setTimeout(scrollToEnd, 200);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    } else {
+      activeTabRef.current?.scrollIntoView({ inline: "center", behavior: "smooth" });
+    }
+  }, [loading, transactions.length, timeRangeUnit, selectedPeriodId]);
 
   // UI state
   const [walletDropdownOpen, setWalletDropdownOpen] = useState(false);
@@ -423,6 +448,8 @@ export default function TransactionsPage() {
   const [syncToast, setSyncToast] = useState<string | null>(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [showOnlyIssues, setShowOnlyIssues] = useState(false);
+  const [convertingTx, setConvertingTx] = useState<Transaction | null>(null);
+  const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
 
   // Currency switcher state (matching user image dropdown)
   const [selectedDisplayCurrency, setSelectedDisplayCurrency] = useState<string | null>(null);
@@ -434,6 +461,15 @@ export default function TransactionsPage() {
   const [currentTourStep, setCurrentTourStep] = useState(0);
   const [showCelebration, setShowCelebration] = useState(false);
   const [showCelebrationToast, setShowCelebrationToast] = useState(false);
+  const [hasCompletedTour, setHasCompletedTour] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("moneydocs_tour_completed_transactions") === "true") {
+        setHasCompletedTour(true);
+      }
+    } catch {}
+  }, []);
 
   const handleStartTour = () => {
     setCurrentTourStep(0);
@@ -456,6 +492,10 @@ export default function TransactionsPage() {
 
   const handleCompleteTour = () => {
     setTourOpen(false);
+    setHasCompletedTour(true);
+    try {
+      localStorage.setItem("moneydocs_tour_completed_transactions", "true");
+    } catch {}
     setShowCelebration(true);
     setShowCelebrationToast(true);
     setTimeout(() => {
@@ -570,6 +610,17 @@ export default function TransactionsPage() {
     if (viewCurrency === "IDR") return tx.convertedAmountIDR;
     const idrAmount = tx.convertedAmountIDR || convertCurrency(tx.amount, tx.currency, "IDR");
     return convertCurrency(idrAmount, "IDR", viewCurrency, rates);
+  };
+
+  const amountToViewCurrency = (amount: number, fromCurrency: string = "IDR"): number => {
+    const normFrom = fromCurrency === "NTD" ? "TWD" : fromCurrency;
+    const normView = viewCurrency === "NTD" ? "TWD" : viewCurrency;
+    if (normFrom === normView) return amount;
+    if (rates && Object.keys(rates).length > 0) {
+      return convertCurrency(amount, normFrom, normView, rates);
+    }
+    const idrAmount = convertCurrency(amount, normFrom, "IDR");
+    return convertCurrency(idrAmount, "IDR", normView, rates);
   };
 
   // Filter transactions
@@ -700,8 +751,29 @@ export default function TransactionsPage() {
     filteredTransactions.forEach((tx) => {
       const amt = toViewCurrency(tx);
       const isLoan = isLoanCategory(tx.category, tx.subCategory);
-      if (tx.type === "INCOME" || (tx.type === "DEBT" && isLoan)) inf += amt;
-      else if (tx.type === "EXPENSE") out += amt;
+      if (tx.type === "INCOME") {
+        inf += amt;
+      } else if (tx.type === "EXPENSE") {
+        out += amt;
+      } else if (tx.type === "DEBT") {
+        if (isLoan) {
+          inf += amt;
+          if (tx.debtPayments && tx.debtPayments.length > 0) {
+            tx.debtPayments.forEach((p) => {
+              out += amountToViewCurrency(p.amount, p.currency || tx.currency);
+            });
+          }
+        } else {
+          // Debt payments/amounts are outflows deducted from account balance
+          if (tx.debtPayments && tx.debtPayments.length > 0) {
+            tx.debtPayments.forEach((p) => {
+              out += amountToViewCurrency(p.amount, p.currency || tx.currency);
+            });
+          } else if ((Number(tx.debtRepaidAmount) || 0) > 0) {
+            out += amountToViewCurrency(Number(tx.debtRepaidAmount) || 0, tx.currency);
+          }
+        }
+      }
     });
     return { inflow: inf, outflow: out, net: inf - out };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -719,6 +791,22 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWallet, wallets, viewCurrency, rates]);
 
+  // Tour preview mode: when tour is running and user has no transactions/balance,
+  // show representative dummy figures and activity feed so spotlights point to real content.
+  const isTourPreview = tourOpen && filteredTransactions.length === 0;
+  const displayBalance = isTourPreview && totalBalance === 0
+    ? (viewCurrency === "IDR" ? 14850000 : 1250)
+    : totalBalance;
+  const displayInflow = isTourPreview && inflow === 0
+    ? (viewCurrency === "IDR" ? 8500000 : 850)
+    : inflow;
+  const displayOutflow = isTourPreview && outflow === 0
+    ? (viewCurrency === "IDR" ? 3200000 : 320)
+    : outflow;
+  const displayNet = isTourPreview && net === 0
+    ? (viewCurrency === "IDR" ? 5300000 : 530)
+    : net;
+
   // Group by day
   const groupedByDay = useMemo(() => {
     const groups: Record<string, { date: Date; items: Transaction[]; netDay: number; hasIssues: boolean }> = {};
@@ -735,8 +823,28 @@ export default function TransactionsPage() {
 
       const amt = toViewCurrency(tx);
       const isLoan = isLoanCategory(tx.category, tx.subCategory);
-      if (tx.type === "INCOME" || (tx.type === "DEBT" && isLoan)) groups[key].netDay += amt;
-      else if (tx.type === "EXPENSE") groups[key].netDay -= amt;
+      if (tx.type === "INCOME") {
+        groups[key].netDay += amt;
+      } else if (tx.type === "EXPENSE") {
+        groups[key].netDay -= amt;
+      } else if (tx.type === "DEBT") {
+        if (isLoan) {
+          groups[key].netDay += amt;
+          if (tx.debtPayments && tx.debtPayments.length > 0) {
+            tx.debtPayments.forEach((p) => {
+              groups[key].netDay -= amountToViewCurrency(p.amount, p.currency || tx.currency);
+            });
+          }
+        } else {
+          if (tx.debtPayments && tx.debtPayments.length > 0) {
+            tx.debtPayments.forEach((p) => {
+              groups[key].netDay -= amountToViewCurrency(p.amount, p.currency || tx.currency);
+            });
+          } else if ((Number(tx.debtRepaidAmount) || 0) > 0) {
+            groups[key].netDay -= amountToViewCurrency(Number(tx.debtRepaidAmount) || 0, tx.currency);
+          }
+        }
+      }
     });
 
     return Object.entries(groups).sort((a, b) => (a[0] < b[0] ? 1 : -1));
@@ -778,9 +886,27 @@ export default function TransactionsPage() {
       }
       groups[key].items.push(tx);
       const amt = toViewCurrency(tx);
-      if (tx.type === "EXPENSE") groups[key].total += amt;
-      else if (tx.type === "INCOME") groups[key].total += amt;
-      else groups[key].total += amt;
+      if (tx.type === "EXPENSE") {
+        groups[key].total += amt;
+      } else if (tx.type === "INCOME") {
+        groups[key].total += amt;
+      } else if (tx.type === "DEBT") {
+        const isLoan = isLoanCategory(tx.category, tx.subCategory);
+        if (isLoan) {
+          groups[key].total += amt;
+        } else {
+          const debtPaid =
+            tx.debtPayments && tx.debtPayments.length > 0
+              ? tx.debtPayments.reduce(
+                  (s, p) => s + amountToViewCurrency(p.amount, p.currency || tx.currency),
+                  0
+                )
+              : amountToViewCurrency(Number(tx.debtRepaidAmount) || 0, tx.currency);
+          groups[key].total += debtPaid;
+        }
+      } else {
+        groups[key].total += amt;
+      }
     });
 
     return Object.values(groups).sort((a, b) => {
@@ -911,26 +1037,33 @@ export default function TransactionsPage() {
           </button>
         </div>
       ) : (
-        <div className="flex items-center justify-between py-1">
-          <button
-            type="button"
-            onClick={handleStartTour}
-            className="relative w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer group"
-            title="Interactive Tour & Guide"
-            aria-label="Start Onboarding Spotlight Tour"
-          >
-            <HelpCircle className="w-5 h-5 transition-transform duration-200 group-hover:scale-110" />
-            <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 pointer-events-none">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-primary-light,#34d399)] opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[var(--color-primary,#10b981)]" />
-            </span>
-          </button>
+        <div className="grid grid-cols-3 items-center py-1">
+          {/* Left: Help / Guide Tour */}
+          <div className="flex items-center justify-start">
+            <button
+              type="button"
+              onClick={handleStartTour}
+              className="relative w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer group"
+              title="Interactive Tour & Guide"
+              aria-label="Start Onboarding Spotlight Tour"
+            >
+              <HelpCircle className="w-5 h-5 transition-transform duration-200 group-hover:scale-110" />
+              {!hasCompletedTour && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5 pointer-events-none">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-primary-light,#34d399)] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[var(--color-primary,#10b981)]" />
+                </span>
+              )}
+            </button>
+          </div>
 
-          {/* Wallet Switcher Pill with Global internet icon */}
-          <WalletSwitcher />
+          {/* Center: Wallet Switcher Pill */}
+          <div className="flex items-center justify-center">
+            <WalletSwitcher />
+          </div>
 
           {/* Right: Search & 3-Dot Options */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center justify-end gap-1">
             <button
               onClick={() => setSearchOpen((s) => !s)}
               className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition-colors"
@@ -1109,7 +1242,7 @@ export default function TransactionsPage() {
       <div id="spotlight-balance-section" className="text-center pt-1 pb-2">
         <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">Balance</p>
         <h1 className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
-          {formatMoney(totalBalance, viewCurrency)}
+          {formatMoney(displayBalance, viewCurrency)}
         </h1>
         
         {/* Currency Switcher Dropdown matching user image */}
@@ -1168,7 +1301,11 @@ export default function TransactionsPage() {
       </div>
 
       {/* Horizontally scrollable period tabs */}
-      <div id="spotlight-period-tabs" className="flex items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-b border-white/8 text-xs font-bold tracking-wider px-2 scroll-smooth">
+      <div
+        ref={tabsContainerRef}
+        id="spotlight-period-tabs"
+        className="flex items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-b border-white/8 text-xs font-bold tracking-wider px-2 scroll-smooth"
+      >
         {periodTabs.map((tab) => {
           const isActive = selectedPeriodId === tab.id;
           return (
@@ -1193,17 +1330,17 @@ export default function TransactionsPage() {
       <div id="spotlight-cashflow-card" className="money-card p-4 bg-[#141519] border border-white/8 rounded-2xl space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-slate-400">Inflow</span>
-          <span className="text-sky-400 font-bold">{formatMoney(inflow, viewCurrency)}</span>
+          <span className="text-sky-400 font-bold">{formatMoney(displayInflow, viewCurrency)}</span>
         </div>
         <div className="flex items-center justify-between text-xs">
           <span className="text-slate-400">Outflow</span>
-          <span className="text-red-400 font-bold">{formatMoney(outflow, viewCurrency)}</span>
+          <span className="text-red-400 font-bold">{formatMoney(displayOutflow, viewCurrency)}</span>
         </div>
 
         <div className="border-t border-white/8 pt-1 flex justify-end">
-          <span className={`text-sm font-extrabold ${net >= 0 ? "text-slate-200" : "text-white"}`}>
-            {net >= 0 ? "+" : ""}
-            {formatMoney(net, viewCurrency)}
+          <span className={`text-sm font-extrabold ${displayNet >= 0 ? "text-slate-200" : "text-white"}`}>
+            {displayNet >= 0 ? "+" : ""}
+            {formatMoney(displayNet, viewCurrency)}
           </span>
         </div>
 
@@ -1314,6 +1451,91 @@ export default function TransactionsPage() {
             ))}
           </div>
         ) : filteredTransactions.length === 0 ? (
+          isTourPreview ? (
+            /* Dummy activity feed during onboarding tour preview */
+            <div className="space-y-3 pointer-events-none select-none" aria-hidden="true">
+              <div className="bg-[#141519] border border-white/8 rounded-2xl overflow-hidden shadow-sm">
+                <div className="flex items-center justify-between px-4 py-2.5 bg-[#171920] border-b border-white/6 text-xs text-slate-400 font-semibold">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-bold text-sm">Today</span>
+                    <span>• {new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                  </div>
+                  <span className="text-sky-400 font-bold">
+                    +{formatMoney(viewCurrency === "IDR" ? 5300000 : 530, viewCurrency)}
+                  </span>
+                </div>
+                <div className="divide-y divide-white/6">
+                  {/* Sample 1: Income */}
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <CategoryIcon categoryId="INCOME" size="md" />
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-white text-xs font-semibold">Monthly Salary</p>
+                        </div>
+                        <p className="text-[11px] text-slate-400">Work & Salary</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-sky-400">
+                      +{formatMoney(viewCurrency === "IDR" ? 8500000 : 850, viewCurrency)}
+                    </span>
+                  </div>
+
+                  {/* Sample 2: Expense */}
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <CategoryIcon categoryId="FOOD_BEVERAGE" size="md" />
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-white text-xs font-semibold">Weekly Groceries</p>
+                        </div>
+                        <p className="text-[11px] text-slate-400">Food & Dining</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-red-400">
+                      -{formatMoney(viewCurrency === "IDR" ? 650000 : 65, viewCurrency)}
+                    </span>
+                  </div>
+
+                  {/* Sample 3: Expense with Issue Warning Badge */}
+                  <div className="flex items-center justify-between px-4 py-3 bg-amber-500/[0.04] border-l-2 border-l-amber-400">
+                    <div className="flex items-center gap-3">
+                      <CategoryIcon categoryId="OTHER_EXPENSES" size="md" />
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-white text-xs font-semibold">Coffee Shop</p>
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" />
+                            <span>Missing Category</span>
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-amber-400 font-semibold">• Tap to review</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-red-400">
+                      -{formatMoney(viewCurrency === "IDR" ? 45000 : 4.5, viewCurrency)}
+                    </span>
+                  </div>
+
+                  {/* Sample 4: Transport */}
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <CategoryIcon categoryId="TRANSPORTATION" size="md" />
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-white text-xs font-semibold">Ride Sharing</p>
+                        </div>
+                        <p className="text-[11px] text-slate-400">Transportation</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-red-400">
+                      -{formatMoney(viewCurrency === "IDR" ? 75000 : 7.5, viewCurrency)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className="text-center py-12 text-slate-500">
             <p className="text-3xl mb-2">{showOnlyIssues ? "🎉" : "📋"}</p>
             <p className="text-sm font-medium text-slate-400">
@@ -1334,6 +1556,7 @@ export default function TransactionsPage() {
               </button>
             )}
           </div>
+          )
         ) : viewMode === "BY_CATEGORY" ? (
           /* View By Category */
           <div className="space-y-3">
@@ -1447,10 +1670,26 @@ export default function TransactionsPage() {
                             {tx.type === "DEBT" && (
                               <div className="mt-1 pt-1 border-t border-white/5 flex items-center gap-1.5 text-[11px] flex-wrap">
                                 {isDebtPaid ? (
-                                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                                    <Check className="w-3 h-3" />
-                                    <span>{isLoan ? "Fully returned" : "Fully paid"} ({formatMoney(repaid, tx.currency)})</span>
-                                  </span>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[var(--color-primary-light)] font-semibold flex items-center gap-1">
+                                      <Check className="w-3 h-3" />
+                                      <span>{isLoan ? "Fully returned" : "Fully paid"} ({formatMoney(repaid, tx.currency)})</span>
+                                    </span>
+                                    {!isLoan && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConvertingTx(tx);
+                                          setIsConvertModalOpen(true);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--color-primary-subtle)] hover:brightness-110 text-[var(--color-primary-light)] border border-[var(--color-primary-border)] transition-colors cursor-pointer"
+                                      >
+                                        <Sparkles className="w-2.5 h-2.5" />
+                                        Convert to Expense
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : repaid > 0 ? (
                                   <span className="text-amber-400/90 font-medium">
                                     {isLoan ? "Returned: " : "Paid: "}
@@ -1485,7 +1724,7 @@ export default function TransactionsPage() {
                             {formatMoney(convertedAmt, viewCurrency)}
                           </span>
                           {isDebtPaid && (
-                            <p className="text-[10px] text-emerald-400 font-bold">
+                            <p className="text-[10px] text-[var(--color-primary-light)] font-bold">
                               ✓ {isLoan ? "Returned" : "Paid"}
                             </p>
                           )}
@@ -1623,10 +1862,26 @@ export default function TransactionsPage() {
                             {tx.type === "DEBT" && (
                               <div className="mt-1 pt-1 border-t border-white/5 flex items-center gap-1.5 text-[11px] flex-wrap">
                                 {isDebtPaid ? (
-                                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                                    <Check className="w-3 h-3" />
-                                    <span>{isLoan ? "Fully returned" : "Fully paid"} ({formatMoney(repaid, tx.currency)})</span>
-                                  </span>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[var(--color-primary-light)] font-semibold flex items-center gap-1">
+                                      <Check className="w-3 h-3" />
+                                      <span>{isLoan ? "Fully returned" : "Fully paid"} ({formatMoney(repaid, tx.currency)})</span>
+                                    </span>
+                                    {!isLoan && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConvertingTx(tx);
+                                          setIsConvertModalOpen(true);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--color-primary-subtle)] hover:brightness-110 text-[var(--color-primary-light)] border border-[var(--color-primary-border)] transition-colors cursor-pointer"
+                                      >
+                                        <Sparkles className="w-2.5 h-2.5" />
+                                        Convert to Expense
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : repaid > 0 ? (
                                   <span className="text-amber-400/90 font-medium">
                                     {isLoan ? "Returned: " : "Paid: "}
@@ -1664,7 +1919,7 @@ export default function TransactionsPage() {
                             {formatMoney(convertedAmt, viewCurrency)}
                           </p>
                           {isDebtPaid && (
-                            <p className="text-[10px] text-emerald-400 font-bold">
+                            <p className="text-[10px] text-[var(--color-primary-light)] font-bold">
                               ✓ {isLoan ? "Returned" : "Paid"}
                             </p>
                           )}
@@ -1777,15 +2032,20 @@ export default function TransactionsPage() {
       )}
 
       {showCelebrationToast && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 px-5 py-3 rounded-2xl bg-[#1a1c24]/95 border border-[var(--color-primary-border)] text-[var(--color-primary-light)] shadow-2xl backdrop-blur-xl animate-fade-in">
-          <div className="w-8 h-8 rounded-full bg-[var(--color-primary-subtle)] flex items-center justify-center text-base">
+        <div
+          className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] w-[calc(100vw-32px)] max-w-md sm:w-auto flex items-center gap-3.5 px-4 sm:px-5 py-3 rounded-2xl bg-[#1a1c24]/95 border border-[var(--color-primary-border)] text-[var(--color-primary-light)] shadow-2xl backdrop-blur-xl animate-fade-in"
+          style={{
+            boxShadow: "0 12px 30px -6px var(--color-primary-glow, rgba(0,0,0,0.5))",
+          }}
+        >
+          <div className="w-9 h-9 rounded-full bg-[var(--color-primary-subtle)] border border-[var(--color-primary-border)] flex-shrink-0 flex items-center justify-center text-base">
             🎉
           </div>
-          <div>
-            <p className="text-xs font-bold text-white tracking-wide">
-              You're all set! Onboarding Complete
+          <div className="min-w-0 flex-1">
+            <p className="text-xs sm:text-sm font-bold text-white tracking-wide">
+              You&apos;re all set! Onboarding Complete
             </p>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
               Tap the <span className="text-[var(--color-primary-light)] font-semibold">?</span> icon anytime if you need a walkthrough.
             </p>
           </div>
@@ -1803,6 +2063,27 @@ export default function TransactionsPage() {
         onComplete={handleCompleteTour}
         padding={10}
       />
+
+      {/* Convert Paid Debt Modal */}
+      {convertingTx && (
+        <ConvertDebtModal
+          isOpen={isConvertModalOpen}
+          onClose={() => {
+            setIsConvertModalOpen(false);
+            setConvertingTx(null);
+          }}
+          transaction={convertingTx as any}
+          onConverted={(updatedTx) => {
+            setTransactions((prev) =>
+              prev.map((t) => (t._id === updatedTx._id ? { ...t, ...updatedTx } : t))
+            );
+            toast("Debt successfully converted to expense transaction!", "success");
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new Event("transaction-added"));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

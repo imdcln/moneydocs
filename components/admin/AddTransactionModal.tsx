@@ -16,7 +16,9 @@ import {
   Users,
   Briefcase,
   Sparkles,
+  Receipt,
 } from "lucide-react";
+import MultiItemPanel, { SplitItem } from "./MultiItemPanel";
 import { useAdminModal } from "@/hooks/useAdminModal";
 import { useKeyboardOffset } from "@/hooks/useKeyboardOffset";
 import {
@@ -132,10 +134,12 @@ export default function AddTransactionModal() {
   const [categoryError, setCategoryError] = useState(false);
   const [navigatingToEvents, setNavigatingToEvents] = useState(false);
 
+  // ── Split / multi-item mode ───────────────────────────────────────────────
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [splitItems, setSplitItems] = useState<SplitItem[]>([]);
+
   const keyboardHeight = useKeyboardOffset();
-  const [isScrolledDown, setIsScrolledDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const focusScrollTopRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const handleKeypadSubmitRef = useRef<() => void>(() => {});
 
@@ -470,6 +474,7 @@ export default function AddTransactionModal() {
     setDebtInterestRate(""); setError(""); setWalletId(""); setIsKeypadOpen(false);
     setIsWalletDropdownOpen(false); setWithPeople([]); setEventId(""); setEventName(""); setEventCurrency("");
     setAutoAppliedInfo(null); setIsUserManualCategory(false); setAmountError(false); setCategoryError(false); setShowAllDescriptions(false);
+    setIsSplitMode(false); setSplitItems([]);
   };
 
   const handleClose = () => { resetForm(); closeModal(); };
@@ -487,6 +492,65 @@ export default function AddTransactionModal() {
   };
 
   const handleSubmit = async () => {
+    // ── Split mode: validate items, derive total from their sum ───────────
+    if (isSplitMode) {
+      const invalid = splitItems.find((i) => !i.title.trim() || !(parseFloat(i.amount) > 0) || !i.category);
+      if (invalid || splitItems.length === 0) {
+        setError("All items need a name, amount > 0, and a category.");
+        return;
+      }
+      const computedTotal = splitItems.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+      if (computedTotal <= 0) {
+        setError("Total must be greater than zero.");
+        return;
+      }
+
+      setSaving(true); setError("");
+
+      const batchPayload = {
+        items: splitItems.map((i) => ({
+          type: activeTab,
+          title: i.title.trim(),
+          amount: parseFloat(i.amount),
+          currency,
+          category: i.category,
+          subCategory: i.subCategory,
+          description: i.title.trim(),
+        })),
+        walletId: walletId || undefined,
+        date: selectedDate.toISOString(),
+        tags: tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : [],
+        receiptUrl: receiptUrl || undefined,
+        eventId: eventId || undefined,
+        eventName: eventName || undefined,
+        eventCurrency: eventCurrency || undefined,
+        withPeople: withPeople.length > 0 ? withPeople : undefined,
+        totalAmount: computedTotal,
+      };
+      try {
+        const res = await fetch("/api/finance/transactions/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(batchPayload),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setError(err.error ?? "Failed to save transactions.");
+          setSaving(false);
+          return;
+        }
+        handleClose();
+        router.refresh();
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("transaction-added"));
+      } catch {
+        setError("Network error. Please try again.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // ── Single transaction (original flow) ────────────────────────────────
     const evaluated = safeEvaluateMath(rawAmount);
     const numericAmount = parseFloat(evaluated);
     const isAmountValid = Boolean(numericAmount && numericAmount > 0);
@@ -498,8 +562,8 @@ export default function AddTransactionModal() {
       return;
     }
 
-
     setSaving(true); setError("");
+
     const trimmedDesc = description.trim();
     const payload = {
       type: activeTab,
@@ -531,17 +595,6 @@ export default function AddTransactionModal() {
       if (typeof window !== "undefined") window.dispatchEvent(new Event("transaction-added"));
     } catch { setError("Network error. Please try again."); }
     finally { setSaving(false); }
-  };
-
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const currentScrollTop = e.currentTarget.scrollTop;
-    if (isDescFocused) {
-      if (currentScrollTop - focusScrollTopRef.current > 30) {
-        setIsScrolledDown(true);
-      } else if (currentScrollTop - focusScrollTopRef.current <= 10) {
-        setIsScrolledDown(false);
-      }
-    }
   };
 
   const handleAmountEnter = () => {
@@ -628,7 +681,7 @@ export default function AddTransactionModal() {
               </div>
             </div>
 
-            <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-3 space-y-5 pb-4">
+            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-3 space-y-5 pb-4">
               {/* Wallet Row */}
               <div className="flex items-center justify-between py-2 border-b border-white/6">
                 <div className="flex items-center gap-3">
@@ -695,7 +748,63 @@ export default function AddTransactionModal() {
                 </div>
               </div>
 
-              {/* Amount Row — tap to open custom keypad */}
+              {/* Amount Row — tap to open custom keypad (hidden in split mode) */}
+              {isSplitMode && (
+                <div className="py-3 border-b-2 border-[var(--color-primary)]/60">
+                  <div className="flex items-center gap-3">
+                    <div className="relative" ref={currencyDropdownRef} onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => { setIsCurrencyDropdownOpen((v) => !v); }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1b1d24] border border-white/8 hover:border-white/15 transition-all text-xs font-bold text-slate-200 cursor-pointer shadow-sm active:scale-95"
+                      >
+                        <span>{currency}</span>
+                        <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isCurrencyDropdownOpen ? "rotate-180" : ""}`} />
+                      </button>
+                      {isCurrencyDropdownOpen && (
+                        <div className="absolute left-0 top-[calc(100%+6px)] z-[85] w-60 max-h-64 bg-[#1a1c23] border border-white/10 rounded-2xl shadow-2xl overflow-y-auto animate-fade-in py-1 divide-y divide-white/6 text-left">
+                          {SUPPORTED_CURRENCIES.map((code) => {
+                            const info = CURRENCY_INFO[code as SupportedCurrency];
+                            const isActive = currency === code;
+                            return (
+                              <button
+                                key={code}
+                                type="button"
+                                onClick={() => { setCurrency(code); setIsCurrencyDropdownOpen(false); }}
+                                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                                  isActive
+                                    ? "bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)]"
+                                    : "text-slate-300 hover:bg-white/5"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <CurrencyFlag flag={info?.flag ?? ""} code={code} className="text-base flex-shrink-0" />
+                                  <div className="truncate">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-bold text-white">{info?.displayCode ?? code}</span>
+                                      <span className="text-[11px] text-slate-400">({info?.symbol})</span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-400 font-normal truncate">{info?.name}</p>
+                                  </div>
+                                </div>
+                                {isActive && <Check className="w-4 h-4 text-[var(--color-primary-light)] flex-shrink-0 ml-2" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-4xl font-extrabold tracking-tight text-[var(--color-primary-light)]">
+                        {splitItems.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0)
+                          .toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-500 pl-0.5">Total · auto-calculated from items below</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {!isSplitMode && (
               <div
                 className={`py-3 border-b-2 cursor-text transition-colors duration-200 ${
                 amountError
@@ -788,8 +897,10 @@ export default function AddTransactionModal() {
                 )}
                 {!isKeypadOpen && <p className="mt-1 text-[10px] text-slate-600 pl-1">Tap to enter amount</p>}
               </div>
+              )}
 
               {/* Category Row */}
+              {!isSplitMode && (
               <button
                 type="button"
                 onClick={() => {
@@ -853,8 +964,10 @@ export default function AddTransactionModal() {
                   }`}
                 />
               </button>
+              )}
 
               {/* Description Row with Smart Options */}
+              {!isSplitMode && (
               <div className="py-2 border-b border-white/6">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-[#1d1f25] flex items-center justify-center text-slate-400 flex-shrink-0">
@@ -948,6 +1061,36 @@ export default function AddTransactionModal() {
                   )}
                 </AnimatePresence>
               </div>
+              )}
+
+              {/* Split Receipt Toggle */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSplitMode((prev) => !prev);
+                  if (isSplitMode) setSplitItems([]);
+                }}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border border-dashed text-xs font-semibold transition-all duration-200 active:scale-[0.98] ${
+                  isSplitMode
+                    ? "border-[var(--color-primary-border)] bg-[var(--color-primary-subtle)] text-[var(--color-primary-light)] hover:brightness-110"
+                    : "border-white/15 bg-transparent text-slate-400 hover:border-[var(--color-primary-border)] hover:bg-[var(--color-primary-subtle)]/40 hover:text-[var(--color-primary-light)]"
+                }`}
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                {isSplitMode ? "✓ Split receipt — tap to disable" : "Split receipt"}
+              </button>
+
+              {/* Multi-item panel */}
+              {isSplitMode && (
+                <MultiItemPanel
+                  transactionType={activeTab}
+                  currency={currency}
+                  mainCategory={category}
+                  mainSubCategory={subCategory}
+                  items={splitItems}
+                  onChange={setSplitItems}
+                />
+              )}
 
               {/* Date Row */}
               <div className="flex items-center gap-3 py-2 border-t border-white/6">
@@ -1084,58 +1227,30 @@ export default function AddTransactionModal() {
               )}
             </div>
 
-            {/* Floating Save Footer — pops out above keyboard when editing description */}
-            <AnimatePresence>
-              {isDescFocused && !isScrolledDown && (
-                <motion.div
-                  key="floating-save-bar"
-                  initial={{ opacity: 0, y: 25, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 15, scale: 0.95 }}
-                  transition={{ type: "spring", damping: 26, stiffness: 360 }}
-                  style={{
-                    bottom: keyboardHeight > 0 ? `${keyboardHeight + 12}px` : "16px",
-                  }}
-                  className="fixed left-4 right-4 max-w-lg mx-auto z-[75] bg-[#1a1c24]/95 backdrop-blur-xl border border-white/12 shadow-[0_16px_40px_rgba(0,0,0,0.65)] rounded-2xl p-2.5 flex items-center gap-2.5"
-                >
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={handleSubmit}
-                    disabled={saving}
-                    className="flex-1 py-3 px-4 rounded-xl bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                    style={{ boxShadow: "0 4px 14px var(--color-primary-glow)" }}
-                  >
-                    <Check className="w-4 h-4 stroke-[2.5]" />
-                    <span>{saving ? "Saving..." : "Save"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-11 h-11 rounded-xl bg-white/10 hover:bg-white/15 active:bg-white/5 text-white flex items-center justify-center transition-all flex-shrink-0 cursor-pointer border border-white/6"
-                    title="Attach photo / receipt"
-                  >
-                    <ImageIcon className="w-5 h-5 stroke-[2]" />
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Sticky Save Footer — always at bottom of transaction card, sticks back when scrolled */}
+            {/* Sticky Save Footer — always at bottom of transaction card, stays above device keyboard when open */}
             <div
-              className={`px-6 py-4 border-t border-white/8 bg-[#131418] flex items-center gap-3 transition-opacity duration-200 ${
-                isDescFocused && !isScrolledDown ? "opacity-0 pointer-events-none" : "opacity-100"
-              }`}
+              style={{
+                marginBottom: keyboardHeight > 0 ? `${keyboardHeight}px` : undefined,
+              }}
+              className="px-6 py-4 border-t border-white/8 bg-[#131418] flex items-center gap-3 transition-[margin] duration-150 ease-out flex-shrink-0"
             >
-              <button type="button" onClick={handleSubmit} disabled={saving}
-                className="flex-1 py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#1f2026] text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 text-center cursor-pointer">
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleSubmit}
+                disabled={saving}
+                className="flex-1 py-3.5 rounded-full bg-[#26282f] hover:bg-[#32353e] active:bg-[#1f2026] text-white font-bold text-sm tracking-wide transition-all shadow-md active:scale-[0.99] disabled:opacity-50 text-center cursor-pointer"
+              >
                 {saving ? "Saving..." : "Save"}
               </button>
-              <button type="button" onClick={() => fileInputRef.current?.click()}
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => fileInputRef.current?.click()}
                 className="w-12 h-12 rounded-full bg-[var(--color-primary)] hover:brightness-110 active:brightness-95 text-white flex items-center justify-center shadow-lg active:scale-95 transition-all flex-shrink-0 cursor-pointer"
                 style={{ boxShadow: "0 6px 16px var(--color-primary-glow)" }}
-                title="Attach photo / receipt">
+                title="Attach photo / receipt"
+              >
                 <ImageIcon className="w-5 h-5 stroke-[2.2]" />
               </button>
             </div>

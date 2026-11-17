@@ -11,7 +11,12 @@ export function getClientDeviceId(): string {
   try {
     let id = localStorage.getItem("dclne_device_id");
     if (!id || !id.startsWith("dev_")) {
-      id = "dev_" + Math.random().toString(36).substring(2, 10) + "_" + Date.now().toString(36);
+      const match = document.cookie.match(/(?:^|;\s*)dclne_device_id=([^;]+)/);
+      if (match && match[1] && decodeURIComponent(match[1]).startsWith("dev_")) {
+        id = decodeURIComponent(match[1]);
+      } else {
+        id = "dev_" + Math.random().toString(36).substring(2, 10) + "_" + Date.now().toString(36);
+      }
       localStorage.setItem("dclne_device_id", id);
     }
     // Also ensure cookie is kept up to date (1 year expiry)

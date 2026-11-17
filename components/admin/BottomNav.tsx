@@ -39,7 +39,10 @@ export default function BottomNav() {
   }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#101115]/95 backdrop-blur-xl border-t border-white/8 pb-safe shadow-2xl">
+    <nav
+      id="bottom-nav"
+      className="fixed bottom-0 left-0 right-0 z-50 bg-[#101115]/95 backdrop-blur-xl border-t border-white/8 pb-safe shadow-2xl"
+    >
       <div className="max-w-lg mx-auto flex items-center justify-around px-2 py-1.5 relative">
         {/* Tab 1: Home */}
         <Link href="/" className="flex-1">

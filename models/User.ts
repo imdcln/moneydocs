@@ -22,7 +22,8 @@ export interface IPushSubscription {
 export interface IUser extends Document {
   name: string;
   email: string;
-  password?: string;
+  password?: string | null;
+  passwordHash?: string | null;
   image?: string;
   googleId?: string;
   authProvider?: "credentials" | "google";
@@ -45,7 +46,8 @@ const UserSchema = new Schema<IUser>(
   {
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, select: false },
+    password: { type: String, select: false, default: null },
+    passwordHash: { type: String, select: false, default: null },
     image: { type: String },
     googleId: { type: String, sparse: true },
     authProvider: { type: String, enum: ["credentials", "google"], default: "credentials" },
@@ -82,6 +84,15 @@ const UserSchema = new Schema<IUser>(
   },
   { timestamps: true }
 );
+
+// Keep password and passwordHash in sync
+UserSchema.pre("save", function () {
+  if (this.isModified("password") && this.password && !this.isModified("passwordHash")) {
+    this.passwordHash = this.password;
+  } else if (this.isModified("passwordHash") && this.passwordHash && !this.isModified("password")) {
+    this.password = this.passwordHash;
+  }
+});
 
 const User: Model<IUser> =
   mongoose.models.User ?? mongoose.model<IUser>("User", UserSchema);

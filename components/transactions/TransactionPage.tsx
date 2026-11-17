@@ -134,7 +134,7 @@ const ONBOARDING_STEPS: SpotlightStep[] = [
     title: "Real-time Transaction Feed",
     description:
       "⚡ Your expenses, transfers, and income are automatically synced, categorized, and timestamped. Click any entry to inspect the full receipt log.",
-    preferredPlacement: "top",
+    preferredPlacement: "bottom",
   },
   {
     targetId: "spotlight-send-form",
@@ -165,6 +165,15 @@ export default function TransactionPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [showCelebration, setShowCelebration] = useState(false);
   const [showCelebrationToast, setShowCelebrationToast] = useState(false);
+  const [hasCompletedTour, setHasCompletedTour] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("moneydocs_tour_completed_transactions") === "true") {
+        setHasCompletedTour(true);
+      }
+    } catch {}
+  }, []);
 
   // Financial UI states
   const [hideBalance, setHideBalance] = useState(false);
@@ -205,6 +214,10 @@ export default function TransactionPage() {
 
   const handleCompleteTour = () => {
     setTourOpen(false);
+    setHasCompletedTour(true);
+    try {
+      localStorage.setItem("moneydocs_tour_completed_transactions", "true");
+    } catch {}
     // Trigger celebratory confetti & celebration notification
     setShowCelebration(true);
     setShowCelebrationToast(true);
@@ -259,16 +272,21 @@ export default function TransactionPage() {
 
       {/* Celebratory Toast Banner */}
       {showCelebrationToast && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 px-5 py-3 rounded-2xl bg-slate-900/95 border border-emerald-500/40 text-emerald-300 shadow-2xl shadow-emerald-500/20 backdrop-blur-xl animate-in fade-in slide-in-from-top duration-300">
-          <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold">
+        <div
+          className="fixed top-6 left-1/2 -translate-x-1/2 z-[80] w-[calc(100vw-32px)] max-w-md sm:w-auto flex items-center gap-3.5 px-4 sm:px-5 py-3 rounded-2xl bg-[#1a1c24]/95 border border-[var(--color-primary-border)] text-[var(--color-primary-light)] shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top duration-300"
+          style={{
+            boxShadow: "0 12px 30px -6px var(--color-primary-glow, rgba(0,0,0,0.5))",
+          }}
+        >
+          <div className="w-9 h-9 rounded-full bg-[var(--color-primary-subtle)] border border-[var(--color-primary-border)] flex-shrink-0 flex items-center justify-center text-base">
             🎉
           </div>
-          <div>
-            <p className="text-xs font-bold text-white tracking-wide">
-              You're all set! Onboarding Complete
+          <div className="min-w-0 flex-1">
+            <p className="text-xs sm:text-sm font-bold text-white tracking-wide">
+              You&apos;re all set! Onboarding Complete
             </p>
-            <p className="text-[11px] text-slate-400">
-              Feel free to tap the <span className="text-emerald-300 font-semibold">?</span> icon anytime if you need a refresher.
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
+              Feel free to tap the <span className="text-[var(--color-primary-light)] font-semibold">?</span> icon anytime if you need a refresher.
             </p>
           </div>
         </div>
@@ -312,10 +330,12 @@ export default function TransactionPage() {
                 <HelpCircle className="w-5 h-5 transition-transform duration-300 group-hover:rotate-12" />
 
                 {/* Pulsing beacon radar indicator to invite attention */}
-                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-[#0c0d10]" />
-                </span>
+                {!hasCompletedTour && (
+                  <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-[#0c0d10]" />
+                  </span>
+                )}
               </button>
             </div>
 

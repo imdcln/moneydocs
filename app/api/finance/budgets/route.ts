@@ -70,6 +70,16 @@ export async function GET(req: NextRequest) {
       } | null;
 
       if (targetDoc) {
+        const isOwner = String(targetDoc.userId) === userId;
+        const isSharedReadable =
+          Boolean(targetDoc.walletId) &&
+          readableSharedWalletIds.some(
+            (wId) => String(wId) === String(targetDoc.walletId)
+          );
+        if (!isOwner && !isSharedReadable) {
+          return NextResponse.json({ budgets: [], summary: null, categoriesOverview: [] });
+        }
+
         if (
           targetDoc.category === "ALL_CATEGORIES" ||
           targetDoc.category === "ALL" ||

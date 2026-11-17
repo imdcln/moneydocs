@@ -35,14 +35,19 @@ export default function SessionDeviceWatcher() {
           const data = await res.json().catch(() => ({}));
           if (data.reason === "DEVICE_DISCONNECTED" || data.reason === "UNAUTHENTICATED") {
             isKickingOutRef.current = true;
-            if (data.reason === "DEVICE_DISCONNECTED") {
-              try {
-                localStorage.removeItem("dclne_device_id");
-                document.cookie = "dclne_device_id=; path=/; max-age=0; SameSite=Lax";
-              } catch {}
-            }
-            // Kick out immediately
-            await signOut({ redirect: true, callbackUrl: "/auth/signin?disconnected=1" });
+            try {
+              localStorage.removeItem("dclne_device_id");
+              document.cookie = "dclne_device_id=; path=/; max-age=0; SameSite=Lax";
+              document.cookie = "authjs.session-token=; path=/; max-age=0; SameSite=Lax";
+              document.cookie = "next-auth.session-token=; path=/; max-age=0; SameSite=Lax";
+            } catch {}
+
+            try {
+              await signOut({ redirect: false });
+            } catch {}
+
+            // Hard replace to avoid history loops and immediately show signin page
+            window.location.replace("/auth/signin?disconnected=1");
           }
         }
       } catch {
