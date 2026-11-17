@@ -9,12 +9,6 @@ try {
   // Safe fallback if environment prohibits changing DNS servers
 }
 
-const MONGODB_URI = process.env.MONGODB_URI!;
-
-if (!MONGODB_URI) {
-  throw new Error("Please define the MONGODB_URI environment variable in .env.local");
-}
-
 // Extend the Node.js global type to cache the connection
 declare global {
   var _mongooseCache: {
@@ -30,6 +24,12 @@ const cached = global._mongooseCache ?? { conn: null, promise: null };
 global._mongooseCache = cached;
 
 export async function connectDB(): Promise<typeof mongoose> {
+  const MONGODB_URI = process.env.MONGODB_URI;
+
+  if (!MONGODB_URI) {
+    throw new Error("Please define the MONGODB_URI environment variable in .env.local or Vercel Environment Variables");
+  }
+
   if (cached.conn && mongoose.connection.readyState === 1) {
     return cached.conn;
   }
